@@ -3,9 +3,15 @@
  * apply the fixed setup order (preset mount → persona → tool filter →
  * structured output), per-agent memory, abort/timeout fusion, and run-end
  * session disposition (G1/G3/#16).
+ *
+ * Session ids are random UUIDs (filesystem-safe: the JSONL persistence
+ * backend uses the id in a file path, so colons etc. break on Windows).
  * @module @deepseek-ai/dsh-workflow-engine/spawn
  */
 
+import { randomUUID } from 'node:crypto'
+import { mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, type Message } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session } from '@deepseek-ai/dsh-session'
@@ -29,8 +35,6 @@ export interface SpawnCall {
   structured?: { schema: Record<string, unknown> }
   timeoutMs?: number
   signal?: AbortSignal
-  /** Session id to resume (checkpoint resume); absent for a fresh run. */
-  resumeSessionId?: string
 }
 
 export interface SpawnResult {
@@ -46,7 +50,8 @@ interface LiveAgent {
 
 export class AgentRunner {
   private readonly live = new Map<string, LiveAgent>()
-  private readonly structuredSessions = new Map<string, string>()
+  /** Stable filesystem-safe session id per (run, agentId). */
+  private readonly sessions = new Map<string, SessionId>()
 
   constructor(
     private readonly ctx: Context,
@@ -56,12 +61,25 @@ export class AgentRunner {
     private readonly parentPreset?: string,
   ) {}
 
+  /** Stable session id for a session-mode agent within this run. */
   sessionId(agentId: string): SessionId {
-    return SessionId(`${this.flowId}:${this.runId}:${agentId}`)
+    let sid = this.sessions.get(agentId)
+    if (sid === undefined) {
+      sid = SessionId(randomUUID())
+      this.sessions.set(agentId, sid)
+    }
+    return sid
+  }
+
+  /** agentId → sessionId mapping for checkpoint persistence. */
+  sessionMap(): Record<string, string> {
+    const out: Record<string, string> = {}
+    for (const [agentId, sid] of this.sessions) out[agentId] = String(sid)
+    return out
   }
 
   private workspaceDir(agentId: string): string {
-    return `${this.workspaceRoot}\\${this.flowId}\\runs\\${this.runId}\\workspace\\${agentId}`
+    return join(this.workspaceRoot, this.flowId, 'runs', this.runId, 'workspace', agentId)
   }
 
   /** Run one agent call and return its output. */
@@ -73,7 +91,7 @@ export class AgentRunner {
     if (config.memory === 'session') {
       return this.runSession(call)
     }
-    return this.runOneShot(call, undefined)
+    return this.runOneShot(call)
   }
 
   /** Dispose every live session-agent created by this runner. */
@@ -84,10 +102,14 @@ export class AgentRunner {
     this.live.clear()
   }
 
-  private async runOneShot(call: SpawnCall, structured: StructuredAttachment | undefined): Promise<SpawnResult> {
-    const sid = this.sessionId(call.agentId)
-    const handle = await this.createAgent(sid, call, structured)
-    if (!handle) return { ok: false, error: 'agent creation failed' }
+  private async runOneShot(call: SpawnCall): Promise<SpawnResult> {
+    const sid = call.structured ? SessionId(randomUUID()) : this.sessionId(call.agentId)
+    let handle: LiveAgent
+    try {
+      handle = await this.createAgent(sid, call)
+    } catch (error) {
+      return { ok: false, error: messageOf(error) }
+    }
     try {
       const ok = await this.drive(handle.handle.agent, call.taskText, call.signal, call.timeoutMs)
       if (!ok) return { ok: false, error: 'agent run aborted' }
@@ -98,6 +120,8 @@ export class AgentRunner {
       }
       const text = finalAssistantText(handle.handle.agent.session)
       return { ok: true, value: text }
+    } catch (error) {
+      return { ok: false, error: messageOf(error) }
     } finally {
       try { await handle.handle.dispose() } catch { /* best-effort */ }
     }
@@ -113,29 +137,33 @@ export class AgentRunner {
       if (existing) {
         live = { handle: { agent: existing, dispose: async () => {} } }
       } else {
-        const handle = await this.createAgent(sid, call, undefined)
-        if (!handle) return { ok: false, error: 'agent creation failed' }
-        live = handle
+        try {
+          live = await this.createAgent(sid, call)
+        } catch (error) {
+          return { ok: false, error: messageOf(error) }
+        }
       }
       this.live.set(call.agentId, live)
     }
-    const ok = await this.drive(live.handle.agent, call.taskText, call.signal, call.timeoutMs)
-    if (!ok) return { ok: false, error: 'agent run aborted' }
-    return { ok: true, value: finalAssistantText(live.handle.agent.session) }
+    try {
+      const ok = await this.drive(live.handle.agent, call.taskText, call.signal, call.timeoutMs)
+      if (!ok) return { ok: false, error: 'agent run aborted' }
+      return { ok: true, value: finalAssistantText(live.handle.agent.session) }
+    } catch (error) {
+      return { ok: false, error: messageOf(error) }
+    }
   }
 
   private async runStructured(call: SpawnCall): Promise<SpawnResult> {
     // Decision calls always run fresh so each call gets a fresh structured
     // attachment (the capture guard is per-session by design).
-    const sid = this.sessionId(`${call.agentId}:d`)
-    return this.runOneShot({ ...call, resumeSessionId: this.structuredSessions.get(call.agentId) }, undefined)
+    return this.runOneShot(call)
   }
 
-  private async createAgent(
-    sid: SessionId,
-    call: SpawnCall,
-    structured: StructuredAttachment | undefined,
-  ): Promise<LiveAgent | null> {
+  private async createAgent(sid: SessionId, call: SpawnCall): Promise<LiveAgent> {
+    // Ensure the agent's run-isolated workspace directory exists.
+    await mkdir(this.workspaceDir(call.agentId), { recursive: true })
+    let attach: StructuredAttachment | undefined
     const setup = async (agentCtx: Context): Promise<void> => {
       const scope = agentCtx as unknown as PromptScope
       // ① preset mount (G3/#16) — required so the spawned agent has tools.
@@ -154,28 +182,22 @@ export class AgentRunner {
       }
       // ④ structured output (decision nodes only; always fresh-session).
       if (call.structured) {
-        const att = attachStructuredOutput(agentCtx, call.structured.schema)
-        attach = att
+        attach = attachStructuredOutput(agentCtx, call.structured.schema)
       }
     }
-    let attach: StructuredAttachment | undefined = structured
     const signal = fuseSignal(call.signal, call.timeoutMs)
-    try {
-      const handle = await this.ctx.agents.create({
-        sessionId: sid,
-        meta: { cwd: this.workspaceDir(call.agentId) },
-        agentOptions: {
-          provider: call.config.model.provider,
-          model: call.config.model.model,
-          ...(call.config.maxTokens !== undefined ? { maxTokens: call.config.maxTokens } : {}),
-        },
-        setup,
-        signal,
-      })
-      return { handle, structured: attach }
-    } catch (error) {
-      return null
-    }
+    const handle = await this.ctx.agents.create({
+      sessionId: sid,
+      meta: { cwd: this.workspaceDir(call.agentId) },
+      agentOptions: {
+        provider: call.config.model.provider,
+        model: call.config.model.model,
+        ...(call.config.maxTokens !== undefined ? { maxTokens: call.config.maxTokens } : {}),
+      },
+      setup,
+      signal,
+    })
+    return { handle, structured: attach }
   }
 
   private async drive(agent: import('@deepseek-ai/dsh-agent').Agent, taskText: string, signal?: AbortSignal, timeoutMs?: number): Promise<boolean> {
@@ -194,6 +216,10 @@ export class AgentRunner {
       fused.removeEventListener('abort', onAbort)
     }
   }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function fuseSignal(signal: AbortSignal | undefined, timeoutMs?: number): AbortSignal {
