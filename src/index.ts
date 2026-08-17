@@ -88,7 +88,7 @@ async function runWorkflow(
     const checkpointPath = join(workspaceRoot, flowId, 'runs', runId, 'checkpoint.json')
 
     // Materialize agents (pure write, regenerate each run).
-    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.1' })
+    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.2' })
 
     const monitor = exec.agent ? createMonitor(exec.agent.session, runId) : null
     const specHash = hashSpec(loaded.spec, loaded.agents)

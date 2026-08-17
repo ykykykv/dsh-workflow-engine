@@ -16,7 +16,9 @@ export interface AgentPresetsLike {
   mount(ctx: Context, id?: string): Promise<unknown>
 }
 
-interface ScopedContext extends Context {
+/** Minimal systemPrompt surface (plain type, cast via unknown: Context may or may
+ * not be augmented with `systemPrompt` depending on the installed seam set). */
+interface PromptScope {
   systemPrompt: { section(s: { name: string; order: number; text: string }): unknown }
 }
 
@@ -135,7 +137,7 @@ export class AgentRunner {
     structured: StructuredAttachment | undefined,
   ): Promise<LiveAgent | null> {
     const setup = async (agentCtx: Context): Promise<void> => {
-      const scope = agentCtx as unknown as ScopedContext
+      const scope = agentCtx as unknown as PromptScope
       // ① preset mount (G3/#16) — required so the spawned agent has tools.
       const presets = this.ctx.get('agentPresets') as AgentPresetsLike | undefined
       if (presets !== undefined) {
