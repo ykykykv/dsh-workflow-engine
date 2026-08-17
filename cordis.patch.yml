@@ -1,0 +1,10 @@
+# dsh-workflow-engine bundle patch (tool-bundle form)
+- insert:
+    - id: tool-workflow-engine
+      name: '@deepseek-ai/dsh-workflow-engine'
+      config:
+        defaultTimeoutMs: 120000
+        maxTimeoutMs: 600000
+        runTimeoutMs: 0
+        defaultExample: 'guess-number'
+        maxResultChars: 20000
