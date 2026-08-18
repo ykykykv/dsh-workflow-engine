@@ -17,6 +17,7 @@ import { createUserMessage, type Message } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session } from '@deepseek-ai/dsh-session'
 import type { AgentConfig } from '../types.ts'
 import { attachStructuredOutput, type StructuredAttachment } from './structured.ts'
+import { SessionRegistry } from './session-registry.ts'
 
 export interface AgentPresetsLike {
   mount(ctx: Context, id?: string): Promise<unknown>
@@ -50,8 +51,7 @@ interface LiveAgent {
 
 export class AgentRunner {
   private readonly live = new Map<string, LiveAgent>()
-  /** Stable filesystem-safe session id per (run, agentId). */
-  private readonly sessions = new Map<string, SessionId>()
+  private readonly sessions: SessionRegistry
 
   constructor(
     private readonly ctx: Context,
@@ -59,23 +59,19 @@ export class AgentRunner {
     private readonly runId: string,
     private readonly workspaceRoot: string,
     private readonly parentPreset?: string,
-  ) {}
+    seedSessions?: Record<string, string>,
+  ) {
+    this.sessions = new SessionRegistry(seedSessions)
+  }
 
   /** Stable session id for a session-mode agent within this run. */
   sessionId(agentId: string): SessionId {
-    let sid = this.sessions.get(agentId)
-    if (sid === undefined) {
-      sid = SessionId(randomUUID())
-      this.sessions.set(agentId, sid)
-    }
-    return sid
+    return SessionId(this.sessions.id(agentId))
   }
 
   /** agentId → sessionId mapping for checkpoint persistence. */
   sessionMap(): Record<string, string> {
-    const out: Record<string, string> = {}
-    for (const [agentId, sid] of this.sessions) out[agentId] = String(sid)
-    return out
+    return this.sessions.map()
   }
 
   private workspaceDir(agentId: string): string {
@@ -106,7 +102,7 @@ export class AgentRunner {
     const sid = call.structured ? SessionId(randomUUID()) : this.sessionId(call.agentId)
     let handle: LiveAgent
     try {
-      handle = await this.createAgent(sid, call)
+      handle = await this.materializeAgent(sid, call, false)
     } catch (error) {
       return { ok: false, error: messageOf(error) }
     }
@@ -132,13 +128,23 @@ export class AgentRunner {
     let live = this.live.get(call.agentId)
     if (!live) {
       // Reuse a still-live session-mode agent (within-process resume of a
-      // paused run) before creating fresh.
+      // paused run) before materializing fresh.
       const existing = this.ctx.agents.get(sid)
       if (existing) {
         live = { handle: { agent: existing, dispose: async () => {} } }
       } else {
         try {
-          live = await this.createAgent(sid, call)
+          // Cross-process resume restores the persisted session (conversation
+          // memory); fall back to a fresh create if the session is unavailable.
+          if (this.sessions.isResuming(call.agentId)) {
+            try {
+              live = await this.materializeAgent(sid, call, true)
+            } catch {
+              live = await this.materializeAgent(sid, call, false)
+            }
+          } else {
+            live = await this.materializeAgent(sid, call, false)
+          }
         } catch (error) {
           return { ok: false, error: messageOf(error) }
         }
@@ -160,7 +166,7 @@ export class AgentRunner {
     return this.runOneShot(call)
   }
 
-  private async createAgent(sid: SessionId, call: SpawnCall): Promise<LiveAgent> {
+  private async materializeAgent(sid: SessionId, call: SpawnCall, resume: boolean): Promise<LiveAgent> {
     // Ensure the agent's run-isolated workspace directory exists.
     await mkdir(this.workspaceDir(call.agentId), { recursive: true })
     let attach: StructuredAttachment | undefined
@@ -186,17 +192,14 @@ export class AgentRunner {
       }
     }
     const signal = fuseSignal(call.signal, call.timeoutMs).signal
-    const handle = await this.ctx.agents.create({
-      sessionId: sid,
-      meta: { cwd: this.workspaceDir(call.agentId) },
-      agentOptions: {
-        provider: call.config.model.provider,
-        model: call.config.model.model,
-        ...(call.config.maxTokens !== undefined ? { maxTokens: call.config.maxTokens } : {}),
-      },
-      setup,
-      signal,
-    })
+    const agentOptions = {
+      provider: call.config.model.provider,
+      model: call.config.model.model,
+      ...(call.config.maxTokens !== undefined ? { maxTokens: call.config.maxTokens } : {}),
+    }
+    const handle = resume
+      ? await this.ctx.agents.resume({ resumeSessionId: sid, agentOptions, setup, signal })
+      : await this.ctx.agents.create({ sessionId: sid, meta: { cwd: this.workspaceDir(call.agentId) }, agentOptions, setup, signal })
     return { handle, structured: attach }
   }
 

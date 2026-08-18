@@ -8,7 +8,6 @@
 export interface StateFieldSpec {
   type: 'string' | 'number' | 'boolean' | 'json' | 'array'
   element?: StateFieldSpec
-  optional?: boolean
   /** Must be provided via run_workflow `input` (flow cannot start without it). */
   required?: boolean
 }
@@ -34,7 +33,6 @@ export interface AgentNode {
   outputSchema?: JsonSchema
   store?: string
   timeoutMs?: number
-  context?: string
   onError?: OnErrorPolicy
 }
 
@@ -77,7 +75,6 @@ export interface MapNode {
   items: string
   as: string
   forEach: (string | FlowNode)[]
-  into?: string
 }
 
 export interface LoopNode {

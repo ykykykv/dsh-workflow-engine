@@ -100,7 +100,7 @@ async function runWorkflow(
     const checkpointPath = join(workspaceRoot, flowId, 'runs', runId, 'checkpoint.json')
 
     // Materialize agents (pure write, regenerate each run).
-    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.12' })
+    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.13' })
 
     const monitor = exec.agent ? createMonitor(exec.agent.session, runId) : null
     const specHash = hashSpec(loaded.spec, loaded.agents)
@@ -108,6 +108,7 @@ async function runWorkflow(
 
     let initialState: Record<string, unknown> = { ...(loaded.input ?? {}) }
     let restore: { lastNodeId: string | null; stack: Frame[] } | undefined
+    let seedSessions: Record<string, string> | undefined
     if (resumeRunId) {
       const cp = parseCheckpoint(await readFile(checkpointPath, 'utf8'))
       if (cp.flowId !== flowId) throw new Error(`resume: runId ${runId} belongs to flow "${cp.flowId}", not "${flowId}"`)
@@ -116,9 +117,10 @@ async function runWorkflow(
       }
       initialState = cp.state
       restore = { lastNodeId: cp.lastNodeId, stack: cp.stack }
+      seedSessions = cp.agentSessions
     }
 
-    const runner = new AgentRunner(ctx, flowId, runId, workspaceRoot, parentPreset)
+    const runner = new AgentRunner(ctx, flowId, runId, workspaceRoot, parentPreset, seedSessions)
     let seq = 0
 
     const saveCheckpoint = async (snapshot: { lastNodeId: string | null; stack: Frame[]; state: Record<string, unknown> }): Promise<void> => {
@@ -144,7 +146,7 @@ async function runWorkflow(
           config: cfg,
           taskText,
           structured: node.outputSchema ? { schema: node.outputSchema } : undefined,
-          timeoutMs: clampTimeout(node.timeoutMs, resolved.defaultTimeoutMs, resolved.maxTimeoutMs),
+          timeoutMs: clampTimeout(node.timeoutMs ?? loaded.spec.defaults?.timeoutMs, resolved.defaultTimeoutMs, resolved.maxTimeoutMs),
           signal: exec.signal,
         })
         monitor?.agentEnd(seq, result.ok ? 'completed' : 'failed')
@@ -157,7 +159,7 @@ async function runWorkflow(
       onPhase: (title) => { console.log(`[workflow:${flowId}] phase ${title}`) },
       isCancelled: () => exec.signal.aborted,
       now: () => Date.now(),
-      runTimeoutMs: () => resolved.runTimeoutMs,
+      runTimeoutMs: () => loaded.spec.defaults?.runTimeoutMs ?? resolved.runTimeoutMs,
       readers: defaultReaders(),
     }
 

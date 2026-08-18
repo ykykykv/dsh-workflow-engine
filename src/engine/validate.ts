@@ -77,6 +77,29 @@ function collectReachableNamedNodes(spec: FlowSpec): Set<string> {
   return visited
 }
 
+/** A `break` must appear inside a loop body; otherwise it silently ends the
+ * whole run as completed, which is a spec bug. */
+function validateBreakPlacement(spec: FlowSpec, errors: string[]): void {
+  const walk = (refs: (string | FlowNode)[], insideLoop: boolean, visited: Set<string>): void => {
+    for (const ref of refs) {
+      if (typeof ref === 'string') {
+        if (visited.has(ref)) continue
+        const node = spec.nodes[ref]
+        if (!node) continue
+        visited.add(ref)
+        if (node.kind === 'break' && !insideLoop) errors.push(`node ${ref}: break must be inside a loop`)
+        if (node.kind === 'loop') walk(node.body, true, visited)
+        else walk(nodeRefs(node), insideLoop, visited)
+      } else {
+        if (ref.kind === 'break' && !insideLoop) errors.push('inline break must be inside a loop')
+        if (ref.kind === 'loop') walk(ref.body, true, visited)
+        else walk(nodeRefs(ref), insideLoop, visited)
+      }
+    }
+  }
+  walk([spec.entry], false, new Set())
+}
+
 function validateStateField(key: string, f: StateFieldSpec, errors: string[]): void {
   if (!STATE_TYPES.includes(f.type)) {
     errors.push(`state.${key}: unknown type "${f.type}"`)
@@ -235,6 +258,7 @@ export function validateFlowSpec(
     for (const id of Object.keys(spec.nodes)) {
       if (!reachable.has(id)) errors.push(`node ${id}: not reachable from entry`)
     }
+    validateBreakPlacement(spec, errors)
   }
 
   // Parallel same-session-agent conflict (G2): a parallel must not reuse a

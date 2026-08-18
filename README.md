@@ -95,7 +95,8 @@ Node kinds: `agent` / `decision` / `branch` / `sequence` / `parallel` / `map` / 
 - Templates: `{state.a.b}`, `{item.x}`, `{loopIndex}`, bare vars (`{t}` for map `as`, bare paths like `{splitResult.tasks}` resolve against `state`), readers (`{filterBy(history, owner, 'g0')}`), `{path ?? fallback}`, and the run facts `{flowId}` / `{runId}`. Lookup only — logic goes in predicates.
 - Input: state fields declared `required: true` must be supplied via `input` for the flow to start (e.g. `bigTask`, `taskText`, `subject`); fields without it may be filled by the flow itself. Long prompts can be imported from a file: `input: { subject: '@file:./docs/需求.md' }`.
 - Predicates (`branch.if`, `loop.until`): `a==1`, `!splitReview.ok`, `judge.verdict=="reanalyze"`, `&&`/`||`, reader calls. `set` coerces literal `true`/`false`/numbers to typed values, so `set allPass = 'true'` is truthy against `allPass==true`.
-- Every `loop` requires `maxIter` (default guidance 3); `break` exits the nearest loop; `fail` stops the run with `stopReason: 'failed'` (e.g. a loop cap reached without success).
+- Every `loop` requires `maxIter` (default guidance 3); `break` exits the nearest loop (and is validated to be inside a loop); `fail` stops the run with `stopReason: 'failed'` (e.g. a loop cap reached without success).
+- Spec-level `defaults: { timeoutMs, runTimeoutMs }` override the plugin's configured timeouts (per-node timeout is still clamped to `[defaultTimeoutMs, maxTimeoutMs]`).
 - Decision nodes: the agent reports its answer by calling the `structured_output` tool whose argument schema is `outputSchema`; invalid arguments self-correct in-turn; empty capture retries the node (default 3). A `decision` node additionally **routes**: `routeField` names which structured-output field selects `cases` (keyed by its String value), with `default` as fallback (no match + no default → run error).
 - `onError`: `abort` (default) / `retry(N)` / `continue` (writes a placeholder) / `goto`.
 
@@ -130,6 +131,7 @@ node -e "import('@deepseek-ai/dsh-workflow-engine').then(m => console.log(m.name
 - A long `run_workflow` holds the parent turn; segmented by `runTimeoutMs` pause/resume. A background-job mode is future work.
 - A crashed `parallel` re-runs as a whole on resume (session-mode agents gain extra turns).
 - A changed spec blocks resume unless `resumeStrict=true` (reproducibility gate).
+- Resume restores the workflow state/stack **and** session-mode agents' conversation memory (their persisted sessions are resumed; a missing session falls back to a fresh create).
 - Materialized `agent.cordis.yml` files are configuration reference snapshots (model route / memory / tool selection are engine-owned) — not standalone runnable presets.
 - Windows: the shipped examples use pure LLM reasoning; flows that use shell tools inherit the platform's bash/pwsh platform branching via the mounted preset.
 

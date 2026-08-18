@@ -123,6 +123,22 @@ describe('validate', () => {
     }
     expect(validateFlowSpec(spec, agents, { x: 1, list: [] }, readers).ok).toBe(true)
   })
+  it('rejects a break outside a loop', () => {
+    const spec: FlowSpec = {
+      ...base,
+      nodes: { main: { kind: 'sequence', nodes: ['halt'] }, halt: { kind: 'break' } },
+    }
+    const r = validateFlowSpec(spec, agents, { x: 1, list: [] }, readers)
+    expect(r.ok).toBe(false)
+    expect(r.errors.join('; ')).toContain('break must be inside a loop')
+  })
+  it('accepts a break inside a loop', () => {
+    const spec: FlowSpec = {
+      ...base,
+      nodes: { main: { kind: 'loop', maxIter: 3, body: [{ kind: 'break' }] } },
+    }
+    expect(validateFlowSpec(spec, agents, { x: 1, list: [] }, readers).ok).toBe(true)
+  })
   it('validates agents config', () => {
     expect(validateAgents(agents).ok).toBe(true)
     expect(validateAgents({ a: { id: 'a', persona: 'p', model: { provider: 'x', model: 'y' }, memory: 'bogus' } as never }).ok).toBe(false)

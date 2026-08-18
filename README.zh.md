@@ -47,7 +47,7 @@ run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导
 
 ## 编写 flow
 
-每个 flow 是一个目录，含 `agents.js` 与 `flow.spec.js` 两个 JS 数据模块。节点：`agent/decision/branch/sequence/parallel/map/loop/set/push/emit/break/fail`。模板只做取值（支持 `{flowId}`/`{runId}`/裸路径 `{splitResult.tasks}`），逻辑放谓词（`branch.if`、`loop.until`）。每个 `loop` 必须带 `maxIter`；`fail` 节点令运行以 `stopReason:'failed'` 结束（如循环上限未达成）。`decision` 节点可用 `routeField` 指定结构化输出中用于路由的字段，按 `cases`（键为字段值的字符串）跳转，`default` 兜底。
+每个 flow 是一个目录，含 `agents.js` 与 `flow.spec.js` 两个 JS 数据模块。节点：`agent/decision/branch/sequence/parallel/map/loop/set/push/emit/break/fail`。模板只做取值（支持 `{flowId}`/`{runId}`/裸路径 `{splitResult.tasks}`），逻辑放谓词（`branch.if`、`loop.until`）。每个 `loop` 必须带 `maxIter`（`break` 须位于循环内，引擎校验）；`fail` 节点令运行以 `stopReason:'failed'` 结束。`decision` 节点可用 `routeField` 指定结构化输出中用于路由的字段，按 `cases`（键为字段值的字符串）跳转，`default` 兜底。spec 级 `defaults: { timeoutMs, runTimeoutMs }` 可覆盖插件配置的默认超时（每节点超时仍被 `[defaultTimeoutMs, maxTimeoutMs]` clamp）。续跑（resumeRunId）会恢复流程 state/stack **并恢复** session-mode agent 的会话记忆（其持久化会话被 resume；缺失则回退新建）。
 
 **报告/文件输出**：flow 顶部声明 `outputs: ['<路径模板>']`（模板可用 `{state,flowId,runId}`），引擎 run 结束后把文件复制到 `outputDir/<runId>/`（默认 `<工作区>/<flowId>/output/<runId>/`），结果返回 `outputs` 映射。推荐写法：写报告的 agent 把文件写进自己的工作区（写权限天然），flow 把该文件声明为 output，引擎搬运到稳定位置。
 
