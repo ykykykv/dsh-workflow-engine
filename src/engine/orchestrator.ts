@@ -118,7 +118,9 @@ export async function runOrchestrator(
 
   const runAgentWithRetry = async (node: AgentNode | DecisionNode): Promise<AgentRunOutcome> => {
     const taskText = renderTemplate(node.task, env(), ctx.hooks.readers)
-    const defRetry = node.kind === 'decision' ? (node.retry ?? 3) : 1
+    // onError.retry.max overrides the fixed default retries (agent 1 / decision node.retry ?? 3).
+    const onErrorRetry = node.onError?.kind === 'retry' ? node.onError.max : undefined
+    const defRetry = onErrorRetry ?? (node.kind === 'decision' ? (node.retry ?? 3) : 1)
     let last: AgentRunOutcome = { ok: false, error: 'unknown' }
     for (let attempt = 0; attempt <= defRetry; attempt++) {
       const outcome = await ctx.hooks.runAgent(node, taskText)

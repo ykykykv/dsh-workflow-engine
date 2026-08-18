@@ -56,7 +56,13 @@ run_workflow flow: './my-flow'               # relative to the session workspace
 run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # import a txt/md file as the prompt
 ```
 
-`flow` resolution: a built-in name (`guess-number`, …), an absolute path, or a path **relative to the current session workspace**. If the directory or `agents.js` / `flow.spec.js` is missing, the call fails with a clear error.
+`flow` resolution: a built-in name (`guess-number`, …), an absolute path, or a path **relative to the current session workspace**. Built-in flows live **inside the plugin package** (`…/dsh-workflow-engine/examples/`), not in the workspace — the workspace only holds materialized reference snapshots. If the directory or `agents.js` / `flow.spec.js` is missing, the call fails with a clear error.
+
+List the available built-ins:
+
+```text
+run_workflow flow: 'list'
+```
 
 Parameters:
 

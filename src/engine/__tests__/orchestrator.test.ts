@@ -141,6 +141,19 @@ describe('orchestrator', () => {
     expect(r.error?.node).toBe('main')
   })
 
+  it('wires onError.retry.max into the attempt count, then aborts', async () => {
+    const spec: FlowSpec = {
+      name: 's', state: {},
+      entry: 'main',
+      nodes: { main: { kind: 'agent', agent: 'worker', task: 't', store: 'out', onError: { kind: 'retry', max: 2 } } },
+    }
+    let calls = 0
+    const hooks = makeHooks({ runAgent: async () => { calls++; return { ok: false, error: 'boom' } } })
+    const r = await runOrchestrator(spec, agents, {}, 'main', hooks)
+    expect(r.stopReason).toBe('error')
+    expect(calls).toBe(3) // 1 initial + 2 retries
+  })
+
   it('fails the run via a fail node', async () => {
     const spec: FlowSpec = {
       name: 's', state: {},

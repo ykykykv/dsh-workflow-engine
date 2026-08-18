@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadFlow } from '../loader.ts'
+import { loadFlow, listBuiltins } from '../loader.ts'
 
 const AGENTS = `export const agents = {
   worker: { id: 'worker', persona: 'p', model: { provider: 'deepseek-official', model: 'deepseek-v4-flash' }, memory: 'none' },
@@ -17,6 +17,13 @@ function makeFlow(): string {
 }
 
 describe('loader', () => {
+  it('lists shipped built-in flows', async () => {
+    const names = await listBuiltins()
+    expect(names).toContain('guess-number')
+    expect(names).toContain('analysis-report')
+    expect(names).toContain('task-decomposition')
+  })
+
   it('loads a flow by absolute path', async () => {
     const dir = makeFlow()
     const loaded = await loadFlow({ flow: dir, input: { subject: 'x' } })

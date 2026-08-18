@@ -111,8 +111,8 @@ export class AgentRunner {
       return { ok: false, error: messageOf(error) }
     }
     try {
-      const ok = await this.drive(handle.handle.agent, call.taskText, call.signal, call.timeoutMs)
-      if (!ok) return { ok: false, error: 'agent run aborted' }
+      const d = await this.drive(handle.handle.agent, call.taskText, call.signal, call.timeoutMs)
+      if (!d.ok) return { ok: false, error: d.error ?? 'agent run aborted' }
       if (call.structured) {
         const cap = handle.structured?.captured()
         if (cap === undefined) return { ok: false, error: 'structured output not captured' }
@@ -146,8 +146,8 @@ export class AgentRunner {
       this.live.set(call.agentId, live)
     }
     try {
-      const ok = await this.drive(live.handle.agent, call.taskText, call.signal, call.timeoutMs)
-      if (!ok) return { ok: false, error: 'agent run aborted' }
+      const d = await this.drive(live.handle.agent, call.taskText, call.signal, call.timeoutMs)
+      if (!d.ok) return { ok: false, error: d.error ?? 'agent run aborted' }
       return { ok: true, value: finalAssistantText(live.handle.agent.session) }
     } catch (error) {
       return { ok: false, error: messageOf(error) }
@@ -185,7 +185,7 @@ export class AgentRunner {
         attach = attachStructuredOutput(agentCtx, call.structured.schema)
       }
     }
-    const signal = fuseSignal(call.signal, call.timeoutMs)
+    const signal = fuseSignal(call.signal, call.timeoutMs).signal
     const handle = await this.ctx.agents.create({
       sessionId: sid,
       meta: { cwd: this.workspaceDir(call.agentId) },
@@ -200,20 +200,26 @@ export class AgentRunner {
     return { handle, structured: attach }
   }
 
-  private async drive(agent: import('@deepseek-ai/dsh-agent').Agent, taskText: string, signal?: AbortSignal, timeoutMs?: number): Promise<boolean> {
+  private async drive(agent: import('@deepseek-ai/dsh-agent').Agent, taskText: string, signal?: AbortSignal, timeoutMs?: number): Promise<{ ok: boolean; error?: string }> {
     const fused = fuseSignal(signal, timeoutMs)
     const onAbort = (): void => { try { (agent as unknown as { cancel(cause: string): void }).cancel('run aborted') } catch { /* noop */ } }
-    if (fused.aborted) { onAbort(); return false }
-    fused.addEventListener('abort', onAbort, { once: true })
+    if (fused.signal.aborted) {
+      onAbort()
+      return { ok: false, error: fused.cause() === 'timeout' ? `agent run timed out after ${timeoutMs ?? '?'}ms` : 'agent run aborted (cancelled)' }
+    }
+    fused.signal.addEventListener('abort', onAbort, { once: true })
     try {
       agent.followup(createUserMessage({
         content: [{ type: 'text', text: taskText }],
         source: { kind: 'user' },
       }))
       await agent.whenIdle()
-      return !fused.aborted
+      if (fused.signal.aborted) {
+        return { ok: false, error: fused.cause() === 'timeout' ? `agent run timed out after ${timeoutMs ?? '?'}ms` : 'agent run aborted (cancelled)' }
+      }
+      return { ok: true }
     } finally {
-      fused.removeEventListener('abort', onAbort)
+      fused.signal.removeEventListener('abort', onAbort)
     }
   }
 }
@@ -222,17 +228,26 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function fuseSignal(signal: AbortSignal | undefined, timeoutMs?: number): AbortSignal {
+interface FusedSignal {
+  signal: AbortSignal
+  cause: () => 'timeout' | 'cancel' | undefined
+}
+
+function fuseSignal(signal: AbortSignal | undefined, timeoutMs?: number): FusedSignal {
   const ctrl = new AbortController()
+  let timedOut = false
   if (signal?.aborted) ctrl.abort()
   else if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true })
   if (timeoutMs !== undefined && timeoutMs > 0) {
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+    const timer = setTimeout(() => { timedOut = true; ctrl.abort() }, timeoutMs)
     const clear = (): void => clearTimeout(timer)
     ctrl.signal.addEventListener('abort', clear, { once: true })
     if (signal) signal.addEventListener('abort', clear, { once: true })
   }
-  return ctrl.signal
+  return {
+    signal: ctrl.signal,
+    cause: () => (ctrl.signal.aborted ? (timedOut ? 'timeout' : 'cancel') : undefined),
+  }
 }
 
 /** Last assistant message text from a session's derived messages. */

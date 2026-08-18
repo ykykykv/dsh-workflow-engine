@@ -38,7 +38,7 @@ run_workflow flow: './my-flow'                 # 相对当前会话工作区
 run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导入 txt/md 文件作为提示词
 ```
 
-- `flow` 解析顺序：内置名 → 绝对路径 → **相对当前会话工作区**的路径；找不到目录或 `agents.js`/`flow.spec.js` 时报错
+- `flow` 解析顺序：内置名 → 绝对路径 → **相对当前会话工作区**的路径；找不到目录或 `agents.js`/`flow.spec.js` 时报错。**内置 flow 在插件包内**（`…/dsh-workflow-engine/examples/`），不在工作区（工作区只有物化参考快照）。用 `run_workflow flow: 'list'` 列出内置 flow 名。
 - `input`：spec 中标记 `required: true` 的字段必须提供（如 `bigTask`、`subject`）；字符串值以 `@file:<路径>` 开头时，引擎把该 txt/markdown 文件内容读入（相对工作区或绝对，1 MiB 上限）
 - `outputDir`：flow 声明的 `outputs` 复制到的目录（绝对或相对工作区；默认 `<工作区>/<flowId>/output`）
 

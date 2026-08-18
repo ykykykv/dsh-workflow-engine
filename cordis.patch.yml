@@ -3,8 +3,8 @@
     - id: tool-workflow-engine
       name: '@deepseek-ai/dsh-workflow-engine'
       config:
-        defaultTimeoutMs: 120000
-        maxTimeoutMs: 600000
+        defaultTimeoutMs: 300000
+        maxTimeoutMs: 1200000
         runTimeoutMs: 0
         defaultExample: 'guess-number'
         maxResultChars: 20000

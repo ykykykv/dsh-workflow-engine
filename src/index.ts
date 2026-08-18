@@ -1,5 +1,5 @@
 /**
- * @deepseek-ai/dsh-workflow-engine ï¿½?declarative multi-agent workflow engine.
+ * @deepseek-ai/dsh-workflow-engine ï¿?declarative multi-agent workflow engine.
  * @module @deepseek-ai/dsh-workflow-engine
  */
 
@@ -8,7 +8,7 @@ import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import type { Checkpoint, EngineConfig, RunWorkflowResult, StopReason } from './types.ts'
-import { loadFlow } from './engine/loader.ts'
+import { loadFlow, listBuiltins } from './engine/loader.ts'
 import { materializeAgents } from './engine/materialize.ts'
 import { collectOutputs } from './engine/collect.ts'
 import { AgentRunner } from './engine/spawn.ts'
@@ -43,12 +43,14 @@ export function apply(ctx: Context, config: Config = {}): void {
     name: 'run_workflow',
     description:
       'Run a declarative multi-agent workflow described by a flow spec (flow spec + agents config). ' +
-      'Supports serial/parallel/conditional/loop orchestration, schema-validated decision agents, ' +
-      'checkpoint pause-resume by runId, per-agent memory, and collected report outputs. flow resolves by path, ' +
-      'built-in name, or the configured default. Long workflows return "paused" with a runId when runTimeoutMs elapses; ' +
-      'resume with the same flow and resumeRunId. When the user describes a task in natural language, map it onto the ' +
-      "flow's input fields; if unsure of the field names, read <flow-directory>/flow.spec.js first (its description " +
-      'declares the required/optional input contract).',
+      'Built-in flows are ALWAYS available by their bare name (e.g. flow: "task-decomposition") â€?do NOT search the ' +
+      'filesystem for them and do NOT prefix them with ./ or a path; only use an absolute/workspace-relative path for ' +
+      'flows YOU authored. flow: "list" returns the available built-in flow names. ' +
+      'Supports serial/parallel/conditional/loop orchestration, schema-validated decision agents, checkpoint ' +
+      'pause-resume by runId, per-agent memory, and collected report outputs. Long workflows return "paused" with a ' +
+      'runId when runTimeoutMs elapses; resume with the same flow and resumeRunId. When the user describes a task in ' +
+      'natural language, map it onto the flow\'s input fields; if unsure of the field names, read the flow\'s ' +
+      'flow.spec.js (its description declares the required/optional input contract).',
     parameters: {
       flow: { type: 'string', description: 'Path to a flow directory or a built-in name. Default: configured defaultExample.' },
       input: { type: 'object', additionalProperties: true, description: 'Initial run-state input, validated against the spec state shape. A string value "@file:<path>" imports that file\'s content.' },
@@ -86,6 +88,10 @@ async function runWorkflow(
   const outputDirArg = typeof args.outputDir === 'string' && args.outputDir !== '' ? args.outputDir : undefined
 
   try {
+    if (flowRef === 'list') {
+      const builtins = await listBuiltins()
+      return truncate(JSON.stringify({ stopReason: 'completed', runId: null, result: { builtins } }, null, 2), resolved.maxResultChars)
+    }
     const workspaceRoot = exec.agent?.session.header.cwd ?? process.cwd()
     const loaded = await loadFlow({ flow: flowRef, defaultName: resolved.defaultExample, input, baseDir: workspaceRoot })
     const flowId = loaded.spec.name
@@ -94,7 +100,7 @@ async function runWorkflow(
     const checkpointPath = join(workspaceRoot, flowId, 'runs', runId, 'checkpoint.json')
 
     // Materialize agents (pure write, regenerate each run).
-    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.9' })
+    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.10' })
 
     const monitor = exec.agent ? createMonitor(exec.agent.session, runId) : null
     const specHash = hashSpec(loaded.spec, loaded.agents)
@@ -194,5 +200,5 @@ function summarize(state: Record<string, unknown>): Record<string, unknown> {
 }
 
 function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}\nï¿½?[truncated]` : text
+  return text.length > max ? `${text.slice(0, max)}\nï¿?[truncated]` : text
 }

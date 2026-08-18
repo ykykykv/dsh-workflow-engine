@@ -21,8 +21,8 @@ export default {
     reportPath: { type: 'string' },
     reportText: { type: 'string' },
   },
-  defaults: { timeoutMs: 120000, runTimeoutMs: 3600000 },
-  onError: { kind: 'abort' },
+  defaults: { timeoutMs: 300000, runTimeoutMs: 7200000 },
+  onError: { kind: 'retry', max: 2 },
   outputs: ['{flowId}/runs/{runId}/workspace/reporter/output/report.md'],
   entry: 'flow',
   nodes: {

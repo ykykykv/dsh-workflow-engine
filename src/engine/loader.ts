@@ -8,13 +8,31 @@
 
 import { pathToFileURL } from 'node:url'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import type { AgentConfig, FlowSpec } from '../types.ts'
 import { validateAgents, validateFlowSpec } from './validate.ts'
 import { defaultReaders } from './readers.ts'
 
 /** Cap for `@file:` input expansion. */
 const MAX_FILE_INPUT_BYTES = 1024 * 1024
+
+/** List the shipped built-in flow names (directories with agents.js + flow.spec.js). */
+export async function listBuiltins(): Promise<string[]> {
+  const examplesUrl = new URL('../../examples/', import.meta.url)
+  const examplesDir = decodeURIComponent(examplesUrl.pathname.replace(/^\/([A-Za-z]:)/, '$1'))
+  const names: string[] = []
+  let entries: { isDirectory(): boolean; name: string }[]
+  try {
+    entries = await readdir(examplesDir, { withFileTypes: true }) as unknown as { isDirectory(): boolean; name: string }[]
+  } catch {
+    return names
+  }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue
+    if (await exists(join(examplesDir, e.name, 'flow.spec.js'))) names.push(e.name)
+  }
+  return names.sort()
+}
 
 export interface LoadedFlow {
   spec: FlowSpec
@@ -54,7 +72,10 @@ export async function loadFlow(opts: LoadOptions): Promise<LoadedFlow> {
   }
 
   if (!(await exists(dir))) {
-    throw new Error(`run_workflow: flow not found at "${dir}"${asBuiltIn ? ` (built-in "${ref}" has no examples/${ref} directory)` : ''}`)
+    const hint = asBuiltIn
+      ? ` (built-in "${ref}" has no examples/${ref} directory)`
+      : await builtInHint(ref)
+    throw new Error(`run_workflow: flow not found at "${dir}"${hint}`)
   }
   const agentsPath = join(dir, 'agents.js')
   const specPath = join(dir, 'flow.spec.js')
@@ -122,6 +143,17 @@ async function importSafe(url: string): Promise<Record<string, unknown> | undefi
 
 async function exists(p: string): Promise<boolean> {
   try { const { access } = await import('node:fs/promises'); await access(p); return true } catch { return false }
+}
+
+/** When a path fails to resolve but a built-in of the same name exists, tell the
+ * caller to drop the path prefix (avoids the "searched the wrong place" trap). */
+async function builtInHint(ref: string): Promise<string> {
+  const base = ref.replace(/^\.\//, '').replace(/[\\/]+$/, '')
+  if (base === '') return ''
+  const builtins = await listBuiltins()
+  return builtins.includes(base)
+    ? ` (a built-in "${base}" exists — if you meant the built-in, drop the path prefix: flow: '${base}')`
+    : ` (available built-ins: ${builtins.join(', ') || 'none'})`
 }
 
 export { dirname }
