@@ -5,7 +5,12 @@ import {
   parseCheckpoint,
   resumeAllowed,
   planResume,
+  atomicWriteFile,
 } from '../checkpoint.ts'
+import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import type { AgentConfig, Checkpoint, FlowSpec } from '../../types.ts'
 
 const spec: FlowSpec = { name: 'demo', state: {}, entry: 'main', nodes: { main: { kind: 'set', assign: { x: '1' } } } }
@@ -39,5 +44,13 @@ describe('checkpoint', () => {
     expect(missing).toEqual([])
     const { missing: m2 } = planResume(cp, () => false)
     expect(m2).toEqual(['a'])
+  })
+
+  it('atomicWriteFile overwrites an existing file (Windows rename-over-existing safe)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wfe-atomic-'))
+    const file = join(dir, 'checkpoint.json')
+    await writeFile(file, 'old', 'utf8')
+    await atomicWriteFile(file, 'new-content')
+    expect(await readFile(file, 'utf8')).toBe('new-content')
   })
 })

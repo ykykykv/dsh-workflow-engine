@@ -5,7 +5,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import type { Checkpoint, EngineConfig, RunWorkflowResult, StopReason } from './types.ts'
 import { loadFlow, listBuiltins } from './engine/loader.ts'
@@ -15,7 +15,7 @@ import { AgentRunner } from './engine/spawn.ts'
 import { createMonitor } from './engine/monitor.ts'
 import { runOrchestrator, type OrchestratorHooks } from './engine/orchestrator.ts'
 import type { Frame } from './types.ts'
-import { hashSpec, parseCheckpoint, resumeAllowed, serializeCheckpoint } from './engine/checkpoint.ts'
+import { hashSpec, parseCheckpoint, resumeAllowed, serializeCheckpoint, atomicWriteFile } from './engine/checkpoint.ts'
 import { defaultReaders } from './engine/readers.ts'
 
 export const name = '@deepseek-ai/dsh-workflow-engine'
@@ -43,7 +43,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     name: 'run_workflow',
     description:
       'Run a declarative multi-agent workflow described by a flow spec (flow spec + agents config). ' +
-      'Built-in flows are ALWAYS available by their bare name (e.g. flow: "task-decomposition") â€?do NOT search the ' +
+      'Built-in flows are ALWAYS available by their bare name (e.g. flow: "task-decomposition") ï¿?do NOT search the ' +
       'filesystem for them and do NOT prefix them with ./ or a path; only use an absolute/workspace-relative path for ' +
       'flows YOU authored. flow: "list" returns the available built-in flow names. ' +
       'Supports serial/parallel/conditional/loop orchestration, schema-validated decision agents, checkpoint ' +
@@ -100,7 +100,7 @@ async function runWorkflow(
     const checkpointPath = join(workspaceRoot, flowId, 'runs', runId, 'checkpoint.json')
 
     // Materialize agents (pure write, regenerate each run).
-    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.10' })
+    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.11' })
 
     const monitor = exec.agent ? createMonitor(exec.agent.session, runId) : null
     const specHash = hashSpec(loaded.spec, loaded.agents)
@@ -130,9 +130,7 @@ async function runWorkflow(
         agentSessions: runner.sessionMap(),
       }
       await mkdir(dirname(checkpointPath), { recursive: true })
-      const tmp = `${checkpointPath}.${process.pid}.${Date.now()}.tmp`
-      await writeFile(tmp, serializeCheckpoint(cp), 'utf8')
-      await rename(tmp, checkpointPath)
+      await atomicWriteFile(checkpointPath, serializeCheckpoint(cp))
     }
 
     const hooks: OrchestratorHooks = {

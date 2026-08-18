@@ -4,7 +4,44 @@
  */
 
 import { createHash } from 'node:crypto'
+import { rename, rm, writeFile } from 'node:fs/promises'
 import type { AgentConfig, Checkpoint, FlowSpec } from '../types.ts'
+
+const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+
+/**
+ * Write a file atomically-ish: temp + rename, with Windows-safe retry and a
+ * direct-write fallback. Renaming over an EXISTING file can fail with EPERM on
+ * Windows when the destination is transiently locked; retry briefly, then
+ * remove the destination and retry, then fall back to a direct write so the
+ * engine never wedges on checkpoint persistence.
+ */
+export async function atomicWriteFile(path: string, content: string): Promise<void> {
+  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`
+  await writeFile(tmp, content, 'utf8')
+  try {
+    await rename(tmp, path)
+    return
+  } catch {
+    // fall through to retry path
+  }
+  for (let i = 0; i < 3; i++) {
+    await delay(50 * (i + 1))
+    try {
+      await rename(tmp, path)
+      return
+    } catch { /* retry */ }
+  }
+  // Destination may be transiently locked: remove it, then rename.
+  try { await rm(path, { force: true }) } catch { /* ignore */ }
+  try {
+    await rename(tmp, path)
+    return
+  } catch { /* fall back to direct write */ }
+  try { await writeFile(path, content, 'utf8') } finally {
+    try { await rm(tmp, { force: true }) } catch { /* ignore */ }
+  }
+}
 /** Stable hash of the loaded spec + agents: the resume gate. */
 export function hashSpec(spec: FlowSpec, agents: Record<string, AgentConfig>): string {
   const stable = JSON.stringify({ spec, agents })

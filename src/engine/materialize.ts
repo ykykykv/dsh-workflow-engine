@@ -6,9 +6,10 @@
  */
 
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AgentConfig } from '../types.ts'
+import { atomicWriteFile } from './checkpoint.ts'
 
 export interface MaterializeOptions {
   workspaceRoot: string
@@ -66,9 +67,7 @@ export async function materializeAgents(
       same = existing === content
     } catch { /* missing or unreadable */ }
     if (same) continue
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-    await writeFile(tmp, content, 'utf8')
-    await rename(tmp, file)
+    await atomicWriteFile(file, content)
     written.push(file)
   }
   return written
