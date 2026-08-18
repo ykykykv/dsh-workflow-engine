@@ -35,6 +35,7 @@ export type StepSignal =
   | { kind: 'paused' }
   | { kind: 'cancelled' }
   | { kind: 'error'; node: string; message: string }
+  | { kind: 'failed'; message: string }
 
 export interface OrchestratorResult {
   stopReason: 'completed' | 'paused' | 'cancelled' | 'failed' | 'error'
@@ -55,11 +56,21 @@ interface RunCtx {
   item?: unknown
   loopIndex?: number
   extra: Record<string, unknown>
+  envExtra: Record<string, unknown>
 }
 
 function isCompound(node: FlowNode | undefined): boolean {
   if (!node) return false
   return node.kind === 'sequence' || node.kind === 'branch' || node.kind === 'loop' || node.kind === 'map'
+}
+
+/** Coerce a rendered `set` value: exact boolean/number literals become typed
+ * values so predicates like `allPass==true` behave as expected. */
+function coerceScalar(rendered: string): unknown {
+  if (rendered === 'true') return true
+  if (rendered === 'false') return false
+  if (/^-?\d+(\.\d+)?$/.test(rendered)) return Number(rendered)
+  return rendered
 }
 
 export async function runOrchestrator(
@@ -69,6 +80,7 @@ export async function runOrchestrator(
   entry: string,
   hooks: OrchestratorHooks,
   restore?: { lastNodeId: string | null; stack: Frame[] },
+  envExtra: Record<string, unknown> = {},
 ): Promise<OrchestratorResult> {
   const ctx: RunCtx = {
     spec,
@@ -79,6 +91,7 @@ export async function runOrchestrator(
     lastNodeId: restore?.lastNodeId ?? null,
     startTs: hooks.now(),
     extra: {},
+    envExtra,
   }
 
   const env = (): { state: Record<string, unknown>; item?: unknown; loopIndex?: number; [k: string]: unknown } => ({
@@ -86,6 +99,7 @@ export async function runOrchestrator(
     item: ctx.item,
     loopIndex: ctx.loopIndex,
     ...ctx.extra,
+    ...ctx.envExtra,
   })
 
   const checkpoint = async (): Promise<StepSignal | null> => {
@@ -118,9 +132,11 @@ export async function runOrchestrator(
     switch (node.kind) {
       case 'break':
         return { kind: 'break' }
+      case 'fail':
+        return { kind: 'failed', message: node.message }
       case 'set': {
         for (const [key, tpl] of Object.entries(node.assign)) {
-          ctx.state[key] = renderTemplate(tpl, env(), ctx.hooks.readers)
+          ctx.state[key] = coerceScalar(renderTemplate(tpl, env(), ctx.hooks.readers))
         }
         ctx.lastNodeId = nodeId
         return { kind: 'ok' }
@@ -238,6 +254,7 @@ export async function runOrchestrator(
         if (top.until !== undefined && evalPredicate(top.until, env(), ctx.hooks.readers)) { ctx.stack.pop(); continue }
         if (top.iter >= top.maxIter) { ctx.stack.pop(); continue }
         top.iter++
+        ctx.loopIndex = top.iter
         ctx.hooks.onPhase(`loop#${top.iter}`)
         ctx.stack.push({ type: 'seq', refs: top.body, index: 0, checkpoint: true })
         continue
@@ -266,6 +283,8 @@ export async function runOrchestrator(
       return { stopReason: 'paused', lastNodeId: ctx.lastNodeId, stack: ctx.stack, state: ctx.state }
     case 'cancelled':
       return { stopReason: 'cancelled', lastNodeId: ctx.lastNodeId, stack: ctx.stack, state: ctx.state }
+    case 'failed':
+      return { stopReason: 'failed', lastNodeId: ctx.lastNodeId, stack: ctx.stack, state: ctx.state, error: { node: 'fail', message: signal.message } }
     case 'error':
       return { stopReason: 'error', lastNodeId: ctx.lastNodeId, stack: ctx.stack, state: ctx.state, error: signal }
   }

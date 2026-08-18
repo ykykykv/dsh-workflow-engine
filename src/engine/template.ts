@@ -57,8 +57,8 @@ function resolveToken(t: string, env: EvalEnv, readers: ReaderRegistry): unknown
     if (reader === undefined) return undefined
     return reader(env, splitArgs(call[2]!))
   }
-  // bare variable: map `as` var (env extra) → item → state key.
-  if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(t)) {
+  // bare variable or bare dotted path (resolved against env.state).
+  if (/^[a-zA-Z_][a-zA-Z0-9_.\[\]]*$/.test(t)) {
     if (t in env) return env[t]
     return getPath(env.state, t)
   }
@@ -105,7 +105,7 @@ export function checkTemplate(tpl: string, readers: ReaderRegistry): string | nu
       if (t.startsWith('state.') || t.startsWith('item.')) { token = null; continue }
       const head = t.split('??')[0]!.trim()
       const call = /^[a-zA-Z_][a-zA-Z0-9_]*\([\s\S]*\)$/.exec(head)
-      const bareVar = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(head)
+      const bareVar = /^[a-zA-Z_][a-zA-Z0-9_.\[\]]*$/.test(head)
       if (call || bareVar) {
         if (call) {
           const name = /^([a-zA-Z_][a-zA-Z0-9_]*)/.exec(head)![1]!

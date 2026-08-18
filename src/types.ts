@@ -107,6 +107,12 @@ export interface BreakNode {
   kind: 'break'
 }
 
+/** Fail the run with an explicit message (stopReason 'failed'). */
+export interface FailNode {
+  kind: 'fail'
+  message: string
+}
+
 export type FlowNode =
   | AgentNode
   | DecisionNode
@@ -119,6 +125,7 @@ export type FlowNode =
   | PushNode
   | EmitNode
   | BreakNode
+  | FailNode
 
 /** One declarative workflow. */
 export interface FlowSpec {
@@ -127,6 +134,9 @@ export interface FlowSpec {
   state: StateShape
   defaults?: { timeoutMs?: number; runTimeoutMs?: number }
   onError?: OnErrorPolicy
+  /** Path templates (rendered with {state, flowId, runId}) of output files the
+   * engine collects to `outputDir/<runId>/` after the run. */
+  outputs?: string[]
   entry: string
   nodes: Record<string, FlowNode>
 }
@@ -179,6 +189,7 @@ export interface RunWorkflowResult {
   stopReason: StopReason
   runId: string
   result?: unknown
+  outputs?: { from: string; to: string }[]
   error?: { node: string; message: string; checkpointPath: string }
 }
 

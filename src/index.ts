@@ -1,15 +1,16 @@
 /**
- * @deepseek-ai/dsh-workflow-engine â€?declarative multi-agent workflow engine.
+ * @deepseek-ai/dsh-workflow-engine ï¿?declarative multi-agent workflow engine.
  * @module @deepseek-ai/dsh-workflow-engine
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import type { Checkpoint, EngineConfig, RunWorkflowResult, StopReason } from './types.ts'
 import { loadFlow } from './engine/loader.ts'
 import { materializeAgents } from './engine/materialize.ts'
+import { collectOutputs } from './engine/collect.ts'
 import { AgentRunner } from './engine/spawn.ts'
 import { createMonitor } from './engine/monitor.ts'
 import { runOrchestrator, type OrchestratorHooks } from './engine/orchestrator.ts'
@@ -48,9 +49,10 @@ export function apply(ctx: Context, config: Config = {}): void {
       'resume with the same flow and resumeRunId.',
     parameters: {
       flow: { type: 'string', description: 'Path to a flow directory or a built-in name. Default: configured defaultExample.' },
-      input: { type: 'object', additionalProperties: true, description: 'Initial run-state input, validated against the spec state shape.' },
+      input: { type: 'object', additionalProperties: true, description: 'Initial run-state input, validated against the spec state shape. A string value "@file:<path>" imports that file\'s content.' },
       resumeRunId: { type: 'string', description: 'Resume a paused/interrupted run by its id.' },
       resumeStrict: { type: 'boolean', description: 'Resume even when the spec changed (default false).' },
+      outputDir: { type: 'string', description: 'Directory the flow\'s declared outputs are copied to (absolute or relative to the session workspace). Default: <workspace>/<flowId>/output.' },
     },
     output: {
       schema: { type: 'string' },
@@ -65,6 +67,7 @@ interface WorkflowArgs {
   input?: unknown
   resumeRunId?: unknown
   resumeStrict?: unknown
+  outputDir?: unknown
 }
 
 async function runWorkflow(
@@ -78,6 +81,7 @@ async function runWorkflow(
   const resumeRunId = typeof args.resumeRunId === 'string' && args.resumeRunId !== '' ? args.resumeRunId : undefined
   const resumeStrict = args.resumeStrict === true
   const flowRef = typeof args.flow === 'string' && args.flow !== '' ? args.flow : undefined
+  const outputDirArg = typeof args.outputDir === 'string' && args.outputDir !== '' ? args.outputDir : undefined
 
   try {
     const workspaceRoot = exec.agent?.session.header.cwd ?? process.cwd()
@@ -88,7 +92,7 @@ async function runWorkflow(
     const checkpointPath = join(workspaceRoot, flowId, 'runs', runId, 'checkpoint.json')
 
     // Materialize agents (pure write, regenerate each run).
-    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.3' })
+    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.4' })
 
     const monitor = exec.agent ? createMonitor(exec.agent.session, runId) : null
     const specHash = hashSpec(loaded.spec, loaded.agents)
@@ -151,7 +155,7 @@ async function runWorkflow(
       readers: defaultReaders(),
     }
 
-    const result = await runOrchestrator(loaded.spec, loaded.agents, initialState, loaded.spec.entry, hooks, restore)
+    const result = await runOrchestrator(loaded.spec, loaded.agents, initialState, loaded.spec.entry, hooks, restore, { flowId, runId })
     monitor?.runEnd(result.stopReason)
 
     // Session disposition (G1): completed/failed dispose run sessions.
@@ -159,10 +163,17 @@ async function runWorkflow(
       await runner.disposeAll()
     }
 
+    // Collect declared outputs to a stable location (option C).
+    const outputDir = outputDirArg !== undefined
+      ? (isAbsolute(outputDirArg) ? outputDirArg : join(workspaceRoot, outputDirArg))
+      : join(workspaceRoot, flowId, 'output')
+    const outputs = await collectOutputs(loaded.spec, result.state, flowId, runId, workspaceRoot, outputDir)
+
     const payload: RunWorkflowResult = {
       stopReason: result.stopReason as StopReason,
       runId,
       result: result.stopReason === 'completed' ? summarize(result.state) : undefined,
+      ...(outputs.length > 0 ? { outputs } : {}),
       ...(result.error ? { error: { node: result.error.node, message: result.error.message, checkpointPath } } : {}),
     }
     return truncate(JSON.stringify(payload, null, 2), resolved.maxResultChars)
@@ -181,5 +192,5 @@ function summarize(state: Record<string, unknown>): Record<string, unknown> {
 }
 
 function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}\nâ€?[truncated]` : text
+  return text.length > max ? `${text.slice(0, max)}\nï¿?[truncated]` : text
 }

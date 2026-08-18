@@ -12,24 +12,25 @@ Declarative multi-agent workflow engine for DeepSeek Harness. Describe workflows
 
 ## Install
 
-Standard Profile Bundle install (web and headless are separate profiles):
+From GitHub (web and headless are separate profiles):
 
 ```sh
-dsh plugin --profile web add @deepseek-ai/dsh-workflow-engine
-dsh plugin --profile headless add @deepseek-ai/dsh-workflow-engine
+dsh plugin --profile web add github:ykykykv/dsh-workflow-engine#v0.0.4
+dsh plugin --profile headless add github:ykykykv/dsh-workflow-engine#v0.0.4
 ```
 
-From a local tarball:
+Git installs fetch **sources**, and the `prepare` script builds them on install. pnpm ≥10 blocks a git dependency's `prepare` script until it is explicitly allowed: the first `add` fails and prints the exact `allowBuilds` key — copy it into the profile's `pnpm-workspace.yaml`, then re-run `add`:
+
+```yaml
+allowBuilds:
+  <printed key>: true
+```
+
+From a local tarball (no build allowance needed):
 
 ```sh
 npm pack
-dsh plugin --profile web add ./deepseek-ai-dsh-workflow-engine-0.0.1.tgz
-```
-
-From GitHub (builds sources on install; requires the pnpm allowBuilds key it prints):
-
-```sh
-dsh plugin --profile web add github:<org>/dsh-workflow-engine
+dsh plugin --profile web add ./deepseek-ai-dsh-workflow-engine-0.0.4.tgz
 ```
 
 Verify the row is composed:
@@ -47,7 +48,8 @@ Start `dsh web`, create a session, and call the `run_workflow` tool:
 ```text
 run_workflow flow: 'guess-number'            # built-in example (variant a: own history)
 run_workflow flow: 'guess-number-shared'     # variant b: full shared history
-run_workflow flow: 'department-flow' input: { taskText: 'prepare the quarterly budget' }
+run_workflow flow: 'analysis-report' input: { subject: 'AI agents in 2026' }
+run_workflow flow: 'analysis-report' input: { subject: '竞品分析', sourceDir: './materials' }
 run_workflow flow: 'task-decomposition' input: { bigTask: 'ship a release' }
 run_workflow flow: '/abs/path/to/my-flow'    # any directory with agents.js + flow.spec.js
 run_workflow flow: './my-flow'               # relative to the session workspace
@@ -64,11 +66,12 @@ Parameters:
 | `input` | object | Initial run-state (type-checked against the spec state shape). Fields the spec marks `required` must be present. A string value `@file:<path>` imports that txt/markdown file's content (relative to the session workspace or absolute; 1 MiB cap). |
 | `resumeRunId` | string | Resume a paused/interrupted run by id. |
 | `resumeStrict` | boolean | Resume even when the spec changed (default `false`). |
+| `outputDir` | string | Directory the flow's declared `outputs` are copied to (absolute, or relative to the session workspace). Default: `<workspace>/<flowId>/output`. |
 
 Result shape:
 
 ```json
-{ "stopReason": "completed|paused|cancelled|failed|error", "runId": "...", "result": {…}, "error": { "node": "…", "message": "…", "checkpointPath": "…" } }
+{ "stopReason": "completed|paused|cancelled|failed|error", "runId": "...", "result": {…}, "outputs": [ { "from": "…", "to": "…" } ], "error": { "node": "…", "message": "…", "checkpointPath": "…" } }
 ```
 
 Long runs return `paused` with a `runId` when `runTimeoutMs` elapses; call again with the same `flow` and `resumeRunId` to continue.
@@ -78,16 +81,21 @@ Long runs return `paused` with a `runId` when `runTimeoutMs` elapses; call again
 A flow is a directory with two JS data modules:
 
 - `agents.js` — `export const agents = { <id>: { id, persona, model: { provider, model }, memory: 'session'|'none', tools?, promptSections?, presetId? } }`
-- `flow.spec.js` — `export default { name, state, defaults?, onError?, entry, nodes }`
+- `flow.spec.js` — `export default { name, state, defaults?, onError?, outputs?, entry, nodes }`
 
-Node kinds: `agent` / `decision` / `branch` / `sequence` / `parallel` / `map` / `loop` / `set` / `push` / `emit` / `break`.
+Node kinds: `agent` / `decision` / `branch` / `sequence` / `parallel` / `map` / `loop` / `set` / `push` / `emit` / `break` / `fail`.
 
-- Templates: `{state.a.b}`, `{item.x}`, `{loopIndex}`, bare vars (`{t}` for map `as`), readers (`{filterBy(history, owner, 'g0')}`), `{path ?? fallback}`. Lookup only — logic goes in predicates.
-- Input: state fields declared `required: true` must be supplied via `input` for the flow to start (e.g. `bigTask`, `taskText`); fields without it may be filled by the flow itself. Long prompts can be imported from a file: `input: { subject: '@file:./docs/需求.md' }`.
-- Predicates (`branch.if`, `loop.until`): `a==1`, `!splitReview.ok`, `judge.verdict=="reanalyze"`, `&&`/`||`, reader calls.
-- Every `loop` requires `maxIter` (default guidance 3); `break` exits the nearest loop.
+- Templates: `{state.a.b}`, `{item.x}`, `{loopIndex}`, bare vars (`{t}` for map `as`, bare paths like `{splitResult.tasks}` resolve against `state`), readers (`{filterBy(history, owner, 'g0')}`), `{path ?? fallback}`, and the run facts `{flowId}` / `{runId}`. Lookup only — logic goes in predicates.
+- Input: state fields declared `required: true` must be supplied via `input` for the flow to start (e.g. `bigTask`, `taskText`, `subject`); fields without it may be filled by the flow itself. Long prompts can be imported from a file: `input: { subject: '@file:./docs/需求.md' }`.
+- Predicates (`branch.if`, `loop.until`): `a==1`, `!splitReview.ok`, `judge.verdict=="reanalyze"`, `&&`/`||`, reader calls. `set` coerces literal `true`/`false`/numbers to typed values, so `set allPass = 'true'` is truthy against `allPass==true`.
+- Every `loop` requires `maxIter` (default guidance 3); `break` exits the nearest loop; `fail` stops the run with `stopReason: 'failed'` (e.g. a loop cap reached without success).
 - Decision nodes: the agent reports its answer by calling the `structured_output` tool whose argument schema is `outputSchema`; invalid arguments self-correct in-turn; empty capture retries the node (default 3).
 - `onError`: `abort` (default) / `retry(N)` / `continue` (writes a placeholder) / `goto`.
+
+Outputs / report files:
+
+- Flow-declared `outputs: ['<path template>']` are files the engine copies after the run to `outputDir/<runId>/`. Templates render with `{state, flowId, runId}`; relative paths resolve against the session workspace.
+- The recommended pattern: an agent writes the report into its own workspace (write permission is natural there), the flow declares that file as an `output`, and the engine delivers it to the stable `outputDir/<runId>/` location; the tool result's `outputs` array carries the `from → to` mapping.
 
 Run directories created under the session workspace:
 
@@ -95,6 +103,7 @@ Run directories created under the session workspace:
 <workspace>/<flowId>/agent/<agentId>/agent.cordis.yml     # materialized reference snapshot
 <workspace>/<flowId>/runs/<runId>/workspace/<agentId>/    # per-agent run-isolated cwd
 <workspace>/<flowId>/runs/<runId>/checkpoint.json         # per-node checkpoint
+<workspace>/<flowId>/output/<runId>/                      # collected outputs (outputDir default)
 ```
 
 ## Consumer verification (release gate)
@@ -102,7 +111,7 @@ Run directories created under the session workspace:
 ```sh
 npm run check        # typecheck + unit tests + build
 npm pack
-dsh plugin --profile compat add -w ./deepseek-ai-dsh-workflow-engine-0.0.1.tgz
+dsh plugin --profile compat add -w ./deepseek-ai-dsh-workflow-engine-0.0.4.tgz
 dsh --profile compat --dump-config | grep tool-workflow-engine
 # module loads in the profile context:
 node -e "import('@deepseek-ai/dsh-workflow-engine').then(m => console.log(m.name, m.inject))"

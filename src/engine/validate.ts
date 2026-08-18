@@ -166,6 +166,9 @@ export function validateFlowSpec(
         break
       case 'emit': break
       case 'break': break
+      case 'fail':
+        if (typeof node.message !== 'string' || node.message === '') errors.push(`node ${id}: fail requires a message`)
+        break
       default:
         errors.push(`node ${id}: unknown node kind`)
     }

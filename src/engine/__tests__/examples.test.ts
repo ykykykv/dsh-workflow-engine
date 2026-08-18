@@ -5,13 +5,13 @@ import { defaultReaders } from '../readers.ts'
 import { runOrchestrator, type OrchestratorHooks } from '../orchestrator.ts'
 import type { AgentConfig, FlowSpec } from '../../types.ts'
 
-const EXAMPLES = ['guess-number', 'guess-number-shared', 'department-flow', 'task-decomposition']
+const EXAMPLES = ['guess-number', 'guess-number-shared', 'task-decomposition', 'analysis-report']
 
 const REQUIRED_INPUT: Record<string, Record<string, unknown>> = {
   'guess-number': {},
   'guess-number-shared': {},
-  'department-flow': { taskText: 'prepare the quarterly budget' },
   'task-decomposition': { bigTask: 'ship a release' },
+  'analysis-report': { subject: 'AI agents in 2026' },
 }
 
 describe('examples', () => {
@@ -25,7 +25,7 @@ describe('examples', () => {
   })
 
   it('requires input for flows that declare required fields', async () => {
-    await expect(loadFlow({ flow: 'department-flow', input: {} })).rejects.toThrow(/required/)
+    await expect(loadFlow({ flow: 'analysis-report', input: {} })).rejects.toThrow(/required/)
     await expect(loadFlow({ flow: 'task-decomposition', input: {} })).rejects.toThrow(/required/)
   })
 
@@ -36,30 +36,57 @@ describe('examples', () => {
   it('rejects a missing flow directory by path', async () => {
     await expect(loadFlow({ flow: './no-such-dir', baseDir: process.cwd() })).rejects.toThrow(/flow not found/)
   })
-})
 
-describe('example flow orchestration (dry-run, scripted agents)', () => {
-  it('runs department-flow routing end-to-end with scripted agents', async () => {
-    const loaded = await loadFlow({ flow: 'department-flow', input: { taskText: 'prepare the quarterly budget' } })
-    const state: Record<string, unknown> = { taskText: 'prepare the quarterly budget' }
-    const hooks = scriptedHooks(loaded.spec, loaded.agents)
-    const r = await runOrchestrator(loaded.spec, loaded.agents, state, loaded.spec.entry, hooks)
-    expect(r.stopReason).toBe('completed')
+  it('allows optional sourceDir in analysis-report', async () => {
+    const withDir = await loadFlow({ flow: 'analysis-report', input: { subject: 'x', sourceDir: './materials' } })
+    expect(withDir.input['sourceDir']).toBe('./materials')
+    const without = await loadFlow({ flow: 'analysis-report', input: { subject: 'x' } })
+    expect(without.input['sourceDir']).toBeUndefined()
   })
 })
 
-function scriptedHooks(spec: FlowSpec, agents: Record<string, AgentConfig>): OrchestratorHooks {
+describe('example flow orchestration (dry-run, scripted agents)', () => {
+  it('runs analysis-report end-to-end with scripted agents', async () => {
+    const loaded = await loadFlow({ flow: 'analysis-report', input: { subject: 'demo' } })
+    const hooks = scriptedHooks(loaded.spec, loaded.agents)
+    const r = await runOrchestrator(loaded.spec, loaded.agents, loaded.input, loaded.spec.entry, hooks, undefined, { flowId: 'analysis-report', runId: 'r1' })
+    expect(r.stopReason).toBe('completed')
+  })
+
+  it('task-decomposition analyzes EVERY task (verdictDone reset per item)', async () => {
+    const loaded = await loadFlow({ flow: 'task-decomposition', input: { bigTask: 'big' } })
+    const hooks = scriptedHooks(loaded.spec, loaded.agents)
+    const r = await runOrchestrator(loaded.spec, loaded.agents, loaded.input, loaded.spec.entry, hooks, undefined, { flowId: 'task-decomposition', runId: 'r1' })
+    expect(r.stopReason).toBe('completed')
+    const results = (r.state['results'] ?? []) as unknown[]
+    expect(results.length).toBe(2)
+  })
+
+  it('task-decomposition fails when the outer cap is reached without all-pass', async () => {
+    const loaded = await loadFlow({ flow: 'task-decomposition', input: { bigTask: 'big' } })
+    const hooks = scriptedHooks(loaded.spec, loaded.agents, { alwaysFail: true })
+    const r = await runOrchestrator(loaded.spec, loaded.agents, loaded.input, loaded.spec.entry, hooks, undefined, { flowId: 'task-decomposition', runId: 'r1' })
+    expect(r.stopReason).toBe('failed')
+  })
+})
+
+function scriptedHooks(spec: FlowSpec, agents: Record<string, AgentConfig>, opts: { alwaysFail?: boolean } = {}): OrchestratorHooks {
   const seq: Record<string, number> = {}
   return {
     async runAgent(node) {
       const n = (seq[node.agent] = (seq[node.agent] ?? 0) + 1)
-      if (node.agent === 'supervisor') {
-        return { ok: true, store: node.store, value: { dept: 'budget' } }
+      switch (node.agent) {
+        case 'analyst': return { ok: true, store: node.store, value: '分析要点：\n- 要点一\n- 要点二' }
+        case 'writer': return { ok: true, store: node.store, value: 'written' }
+        case 'reviewer': return { ok: true, store: node.store, value: { approved: true, feedback: 'ok' } }
+        case 'taskSup': return { ok: true, store: node.store, value: { tasks: ['t1', 't2'] } }
+        case 'splitReviewer': return { ok: true, store: node.store, value: opts.alwaysFail ? { ok: false, advice: 're-split' } : { ok: true, advice: '' } }
+        case 'analystPro': return { ok: true, store: node.store, value: 'feasible' }
+        case 'analystCon': return { ok: true, store: node.store, value: 'concern' }
+        case 'smallReviewer': return { ok: true, store: node.store, value: { verdict: 'pass', guidance: '' } }
+        case 'resplitReviewer': return { ok: true, store: node.store, value: { problems: 'p', advice: 'advice' } }
+        default: return { ok: true, store: node.store, value: `out-${n}` }
       }
-      if (node.agent === 'deptBudgetSup') {
-        return { ok: true, store: node.store, value: { assignee: 'empBudget', detail: 'budget work', approved: true, feedback: 'ok', advice: '', ok: true } }
-      }
-      return { ok: true, store: node.store, value: { approved: true, feedback: 'ok', verdict: 'pass', guidance: '', tasks: ['a', 'b'], ok: true, problems: '', advice: '' } }
     },
     emit: () => {},
     checkpoint: () => {},

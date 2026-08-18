@@ -141,6 +141,28 @@ describe('orchestrator', () => {
     expect(r.error?.node).toBe('main')
   })
 
+  it('fails the run via a fail node', async () => {
+    const spec: FlowSpec = {
+      name: 's', state: {},
+      entry: 'main',
+      nodes: { main: { kind: 'fail', message: 'attempt limit reached' } },
+    }
+    const r = await runOrchestrator(spec, agents, {}, 'main', makeHooks())
+    expect(r.stopReason).toBe('failed')
+    expect(r.error?.message).toContain('attempt limit reached')
+  })
+
+  it('sets loopIndex inside plain loops', async () => {
+    const spec: FlowSpec = {
+      name: 's', state: {},
+      entry: 'main',
+      nodes: { main: { kind: 'loop', maxIter: 3, body: [{ kind: 'set', assign: { li: '{loopIndex}' } }] } },
+    }
+    const r = await runOrchestrator(spec, agents, {}, 'main', makeHooks())
+    expect(r.stopReason).toBe('completed')
+    expect(r.state['li']).toBe(3)
+  })
+
   it('pauses when runTimeoutMs is exceeded', async () => {
     const spec: FlowSpec = {
       name: 's', state: {},
