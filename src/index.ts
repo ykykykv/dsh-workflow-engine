@@ -1,5 +1,5 @@
 /**
- * @deepseek-ai/dsh-workflow-engine ï¿?declarative multi-agent workflow engine.
+ * @deepseek-ai/dsh-workflow-engine ï¿½?declarative multi-agent workflow engine.
  * @module @deepseek-ai/dsh-workflow-engine
  */
 
@@ -94,7 +94,7 @@ async function runWorkflow(
     const checkpointPath = join(workspaceRoot, flowId, 'runs', runId, 'checkpoint.json')
 
     // Materialize agents (pure write, regenerate each run).
-    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.8' })
+    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.9' })
 
     const monitor = exec.agent ? createMonitor(exec.agent.session, runId) : null
     const specHash = hashSpec(loaded.spec, loaded.agents)
@@ -194,5 +194,5 @@ function summarize(state: Record<string, unknown>): Record<string, unknown> {
 }
 
 function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}\nï¿?[truncated]` : text
+  return text.length > max ? `${text.slice(0, max)}\nï¿½?[truncated]` : text
 }

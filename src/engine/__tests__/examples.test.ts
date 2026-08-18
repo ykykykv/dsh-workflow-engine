@@ -56,17 +56,26 @@ describe('example flow orchestration (dry-run, scripted agents)', () => {
   it('task-decomposition analyzes EVERY task (verdictDone reset per item)', async () => {
     const loaded = await loadFlow({ flow: 'task-decomposition', input: { bigTask: 'big' } })
     const hooks = scriptedHooks(loaded.spec, loaded.agents)
+    let reporterCalls = 0
+    const base = hooks.runAgent.bind(hooks)
+    hooks.runAgent = async (node, taskText) => { if (node.agent === 'reporter') reporterCalls++; return base(node, taskText) }
     const r = await runOrchestrator(loaded.spec, loaded.agents, loaded.input, loaded.spec.entry, hooks, undefined, { flowId: 'task-decomposition', runId: 'r1' })
     expect(r.stopReason).toBe('completed')
     const results = (r.state['results'] ?? []) as unknown[]
     expect(results.length).toBe(2)
+    expect(reporterCalls).toBe(1)
+    expect(r.state['reportPath']).toContain('reporter')
   })
 
   it('task-decomposition fails when the outer cap is reached without all-pass', async () => {
     const loaded = await loadFlow({ flow: 'task-decomposition', input: { bigTask: 'big' } })
     const hooks = scriptedHooks(loaded.spec, loaded.agents, { alwaysFail: true })
+    let reporterCalls = 0
+    const base = hooks.runAgent.bind(hooks)
+    hooks.runAgent = async (node, taskText) => { if (node.agent === 'reporter') reporterCalls++; return base(node, taskText) }
     const r = await runOrchestrator(loaded.spec, loaded.agents, loaded.input, loaded.spec.entry, hooks, undefined, { flowId: 'task-decomposition', runId: 'r1' })
     expect(r.stopReason).toBe('failed')
+    expect(reporterCalls).toBe(1) // failure report still produced before fail
   })
 
   it('guess-number actually plays rounds and solves (loop runs, verdict extracted)', async () => {
@@ -98,7 +107,7 @@ function scriptedHooks(spec: FlowSpec, agents: Record<string, AgentConfig>, opts
     async runAgent(node) {
       const n = (seq[node.agent] = (seq[node.agent] ?? 0) + 1)
       switch (node.agent) {
-        case 'analyst': return { ok: true, store: node.store, value: '分析要点：\n- 要点一\n- 要点二' }
+        case 'analyst': return { ok: true, store: node.store, value: 'analysis points' }
         case 'writer': return { ok: true, store: node.store, value: 'written' }
         case 'reviewer': return { ok: true, store: node.store, value: { approved: true, feedback: 'ok' } }
         case 'taskSup': return { ok: true, store: node.store, value: { tasks: ['t1', 't2'] } }
@@ -107,6 +116,7 @@ function scriptedHooks(spec: FlowSpec, agents: Record<string, AgentConfig>, opts
         case 'analystCon': return { ok: true, store: node.store, value: 'concern' }
         case 'smallReviewer': return { ok: true, store: node.store, value: { verdict: 'pass', guidance: '' } }
         case 'resplitReviewer': return { ok: true, store: node.store, value: { problems: 'p', advice: 'advice' } }
+        case 'reporter': return { ok: true, store: node.store, value: 'reported' }
         default: return { ok: true, store: node.store, value: `out-${n}` }
       }
     },

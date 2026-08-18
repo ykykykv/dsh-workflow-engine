@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-workflow-engine",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Declarative multi-agent workflow engine: flow spec + agent config, checkpoint/pause-resume, per-agent memory, materialization",
   "private": true,
   "type": "module",

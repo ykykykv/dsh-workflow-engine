@@ -35,4 +35,10 @@ export const agents = {
     model: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
     memory: 'none',
   },
+  reporter: {
+    id: 'reporter',
+    persona: 'You are the decomposition summarizer. You write a clear Chinese Markdown report of the whole decomposition run to a file using the write tool.',
+    model: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+    memory: 'none',
+  },
 }
