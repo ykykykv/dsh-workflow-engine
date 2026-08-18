@@ -68,6 +68,28 @@ describe('example flow orchestration (dry-run, scripted agents)', () => {
     const r = await runOrchestrator(loaded.spec, loaded.agents, loaded.input, loaded.spec.entry, hooks, undefined, { flowId: 'task-decomposition', runId: 'r1' })
     expect(r.stopReason).toBe('failed')
   })
+
+  it('guess-number actually plays rounds and solves (loop runs, verdict extracted)', async () => {
+    const loaded = await loadFlow({ flow: 'guess-number', input: {} })
+    let refereeCalls = 0
+    const hooks = scriptedHooks(loaded.spec, loaded.agents)
+    hooks.runAgent = async (node) => {
+      if (node.agent === 'referee') {
+        refereeCalls++
+        return { ok: true, store: node.store, value: refereeCalls === 1 ? { secret: 7 } : { correct: refereeCalls >= 3 } }
+      }
+      if (node.agent === 'g0' || node.agent === 'g1' || node.agent === 'g2') {
+        return { ok: true, store: node.store, value: '5' }
+      }
+      return { ok: true, store: node.store, value: 'x' }
+    }
+    const r = await runOrchestrator(loaded.spec, loaded.agents, loaded.input, loaded.spec.entry, hooks, undefined, { flowId: 'guess-number', runId: 'r1' })
+    expect(r.stopReason).toBe('completed')
+    expect(r.state['solved']).toBe(true)
+    const history = (r.state['history'] ?? []) as unknown[]
+    expect(history.length).toBe(2) // g0 wrong, g1 correct
+    expect(refereeCalls).toBe(3) // init + 2 judgments
+  })
 })
 
 function scriptedHooks(spec: FlowSpec, agents: Record<string, AgentConfig>, opts: { alwaysFail?: boolean } = {}): OrchestratorHooks {

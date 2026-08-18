@@ -13,7 +13,7 @@ export default {
   onError: { kind: 'abort' },
   entry: 'start',
   nodes: {
-    start: { kind: 'sequence', nodes: ['init', 'extractSecret'] },
+    start: { kind: 'sequence', nodes: ['init', 'extractSecret', 'roundLoop'] },
     init: {
       kind: 'agent', agent: 'referee',
       task: 'Choose a secret integer from 0 to 10 and report it.',
@@ -35,8 +35,9 @@ export default {
           kind: 'agent', agent: 'referee',
           task: 'The secret is {secret}. Guesser g0 guessed: {guess}. Is it correct?',
           outputSchema: { type: 'object', properties: { correct: { type: 'boolean' } }, required: ['correct'] },
-          store: 'lastCorrect',
+          store: 'judgment',
         },
+        { kind: 'set', assign: { lastCorrect: '{judgment.correct}' } },
         { kind: 'push', into: 'history', value: { owner: 'g0', guess: '{state.guess}', correct: '{state.lastCorrect}' } },
         { kind: 'branch', if: 'lastCorrect==true', then: ['setSolved', 'halt'] },
         {
@@ -48,8 +49,9 @@ export default {
           kind: 'agent', agent: 'referee',
           task: 'The secret is {secret}. Guesser g1 guessed: {guess}. Is it correct?',
           outputSchema: { type: 'object', properties: { correct: { type: 'boolean' } }, required: ['correct'] },
-          store: 'lastCorrect',
+          store: 'judgment',
         },
+        { kind: 'set', assign: { lastCorrect: '{judgment.correct}' } },
         { kind: 'push', into: 'history', value: { owner: 'g1', guess: '{state.guess}', correct: '{state.lastCorrect}' } },
         { kind: 'branch', if: 'lastCorrect==true', then: ['setSolved', 'halt'] },
         {
@@ -61,8 +63,9 @@ export default {
           kind: 'agent', agent: 'referee',
           task: 'The secret is {secret}. Guesser g2 guessed: {guess}. Is it correct?',
           outputSchema: { type: 'object', properties: { correct: { type: 'boolean' } }, required: ['correct'] },
-          store: 'lastCorrect',
+          store: 'judgment',
         },
+        { kind: 'set', assign: { lastCorrect: '{judgment.correct}' } },
         { kind: 'push', into: 'history', value: { owner: 'g2', guess: '{state.guess}', correct: '{state.lastCorrect}' } },
         { kind: 'branch', if: 'lastCorrect==true', then: ['setSolved', 'halt'] },
       ],
