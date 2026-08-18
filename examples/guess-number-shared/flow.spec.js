@@ -11,14 +11,16 @@ export default {
   },
   defaults: { timeoutMs: 120000, runTimeoutMs: 600000 },
   onError: { kind: 'abort' },
-  entry: 'init',
+  entry: 'start',
   nodes: {
+    start: { kind: 'sequence', nodes: ['init', 'extractSecret'] },
     init: {
       kind: 'agent', agent: 'referee',
       task: 'Choose a secret integer from 0 to 10 and report it.',
       outputSchema: { type: 'object', properties: { secret: { type: 'number' } }, required: ['secret'] },
-      store: 'secret',
+      store: 'secretResult',
     },
+    extractSecret: { kind: 'set', assign: { secret: '{secretResult.secret}' } },
     setSolved: { kind: 'set', assign: { solved: 'true' } },
     halt: { kind: 'break' },
     roundLoop: {
