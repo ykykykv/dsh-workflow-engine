@@ -33,6 +33,7 @@ run_workflow flow: 'guess-number'
 run_workflow flow: 'analysis-report' input: { subject: 'AI agents in 2026' }
 run_workflow flow: 'analysis-report' input: { subject: '竞品分析', sourceDir: './materials' }
 run_workflow flow: 'task-decomposition' input: { bigTask: 'ship a release' }
+run_workflow flow: 'roundtable' input: { topic: '团队是否应该引入每日站会' }
 run_workflow flow: '/abs/path/to/my-flow'
 run_workflow flow: './my-flow'                 # 相对当前会话工作区
 run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导入 txt/md 文件作为提示词
@@ -46,7 +47,7 @@ run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导
 
 ## 编写 flow
 
-每个 flow 是一个目录，含 `agents.js` 与 `flow.spec.js` 两个 JS 数据模块。节点：`agent/decision/branch/sequence/parallel/map/loop/set/push/emit/break/fail`。模板只做取值（支持 `{flowId}`/`{runId}`/裸路径 `{splitResult.tasks}`），逻辑放谓词（`branch.if`、`loop.until`）。每个 `loop` 必须带 `maxIter`；`fail` 节点令运行以 `stopReason:'failed'` 结束（如循环上限未达成）。
+每个 flow 是一个目录，含 `agents.js` 与 `flow.spec.js` 两个 JS 数据模块。节点：`agent/decision/branch/sequence/parallel/map/loop/set/push/emit/break/fail`。模板只做取值（支持 `{flowId}`/`{runId}`/裸路径 `{splitResult.tasks}`），逻辑放谓词（`branch.if`、`loop.until`）。每个 `loop` 必须带 `maxIter`；`fail` 节点令运行以 `stopReason:'failed'` 结束（如循环上限未达成）。`decision` 节点可用 `routeField` 指定结构化输出中用于路由的字段，按 `cases`（键为字段值的字符串）跳转，`default` 兜底。
 
 **报告/文件输出**：flow 顶部声明 `outputs: ['<路径模板>']`（模板可用 `{state,flowId,runId}`），引擎 run 结束后把文件复制到 `outputDir/<runId>/`（默认 `<工作区>/<flowId>/output/<runId>/`），结果返回 `outputs` 映射。推荐写法：写报告的 agent 把文件写进自己的工作区（写权限天然），flow 把该文件声明为 output，引擎搬运到稳定位置。
 

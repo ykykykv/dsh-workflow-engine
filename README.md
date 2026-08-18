@@ -51,6 +51,7 @@ run_workflow flow: 'guess-number-shared'     # variant b: full shared history
 run_workflow flow: 'analysis-report' input: { subject: 'AI agents in 2026' }
 run_workflow flow: 'analysis-report' input: { subject: '竞品分析', sourceDir: './materials' }
 run_workflow flow: 'task-decomposition' input: { bigTask: 'ship a release' }
+run_workflow flow: 'roundtable' input: { topic: 'should we adopt Conventional Commits' }
 run_workflow flow: '/abs/path/to/my-flow'    # any directory with agents.js + flow.spec.js
 run_workflow flow: './my-flow'               # relative to the session workspace
 run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # import a txt/md file as the prompt
@@ -95,7 +96,7 @@ Node kinds: `agent` / `decision` / `branch` / `sequence` / `parallel` / `map` / 
 - Input: state fields declared `required: true` must be supplied via `input` for the flow to start (e.g. `bigTask`, `taskText`, `subject`); fields without it may be filled by the flow itself. Long prompts can be imported from a file: `input: { subject: '@file:./docs/需求.md' }`.
 - Predicates (`branch.if`, `loop.until`): `a==1`, `!splitReview.ok`, `judge.verdict=="reanalyze"`, `&&`/`||`, reader calls. `set` coerces literal `true`/`false`/numbers to typed values, so `set allPass = 'true'` is truthy against `allPass==true`.
 - Every `loop` requires `maxIter` (default guidance 3); `break` exits the nearest loop; `fail` stops the run with `stopReason: 'failed'` (e.g. a loop cap reached without success).
-- Decision nodes: the agent reports its answer by calling the `structured_output` tool whose argument schema is `outputSchema`; invalid arguments self-correct in-turn; empty capture retries the node (default 3).
+- Decision nodes: the agent reports its answer by calling the `structured_output` tool whose argument schema is `outputSchema`; invalid arguments self-correct in-turn; empty capture retries the node (default 3). A `decision` node additionally **routes**: `routeField` names which structured-output field selects `cases` (keyed by its String value), with `default` as fallback (no match + no default → run error).
 - `onError`: `abort` (default) / `retry(N)` / `continue` (writes a placeholder) / `goto`.
 
 Outputs / report files:

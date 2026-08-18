@@ -141,6 +141,33 @@ describe('orchestrator', () => {
     expect(r.error?.node).toBe('main')
   })
 
+  it('routes a decision by routeField cases', async () => {
+    const spec: FlowSpec = {
+      name: 's', state: {},
+      entry: 'main',
+      nodes: {
+        main: { kind: 'decision', agent: 'worker', task: 't', outputSchema: {}, store: 'd', routeField: 'go', cases: { 'true': ['a'], 'false': ['b'] } },
+        a: { kind: 'set', assign: { x: 'A' } },
+        b: { kind: 'set', assign: { x: 'B' } },
+      },
+    }
+    const r = await runOrchestrator(spec, agents, {}, 'main', makeHooks({ runAgent: async () => ({ ok: true, store: 'd', value: { go: true } }) }))
+    expect(r.stopReason).toBe('completed')
+    expect(r.state['x']).toBe('A')
+    const r2 = await runOrchestrator(spec, agents, {}, 'main', makeHooks({ runAgent: async () => ({ ok: true, store: 'd', value: { go: false } }) }))
+    expect(r2.state['x']).toBe('B')
+  })
+
+  it('errors when a decision has no matching case and no default', async () => {
+    const spec: FlowSpec = {
+      name: 's', state: {},
+      entry: 'main',
+      nodes: { main: { kind: 'decision', agent: 'worker', task: 't', outputSchema: {}, store: 'd', routeField: 'go', cases: { 'true': ['a'] } }, a: { kind: 'set', assign: { x: 'A' } } },
+    }
+    const r = await runOrchestrator(spec, agents, {}, 'main', makeHooks({ runAgent: async () => ({ ok: true, store: 'd', value: { go: false } }) }))
+    expect(r.stopReason).toBe('error')
+  })
+
   it('wires onError.retry.max into the attempt count, then aborts', async () => {
     const spec: FlowSpec = {
       name: 's', state: {},

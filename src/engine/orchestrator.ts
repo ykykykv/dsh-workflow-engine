@@ -130,6 +130,21 @@ export async function runOrchestrator(
     return last
   }
 
+  /** Apply node/spec onError after an agent/decision call failed. */
+  const handleAgentFailure = (node: AgentNode | DecisionNode, nodeId: string, outcome: AgentRunOutcome): StepSignal => {
+    const p = node.onError ?? ctx.spec.onError
+    if (p !== undefined && p.kind === 'continue') {
+      ctx.state[outcome.store ?? p.store ?? nodeId] = { error: outcome.error ?? 'agent failed' }
+      return { kind: 'ok' }
+    }
+    if (p !== undefined && p.kind === 'goto') {
+      ctx.stack.length = 0
+      ctx.stack.push({ type: 'seq', refs: [p.node], index: 0, checkpoint: false })
+      return { kind: 'ok' }
+    }
+    return { kind: 'error', node: nodeId, message: outcome.error ?? `node ${nodeId} failed` }
+  }
+
   const execPrimitive = async (node: FlowNode, nodeId: string): Promise<StepSignal> => {
     switch (node.kind) {
       case 'break':
@@ -157,25 +172,31 @@ export async function runOrchestrator(
         ctx.hooks.emit(node.event, node.payload ? renderPayload(node.payload) : undefined)
         ctx.lastNodeId = nodeId
         return { kind: 'ok' }
-      case 'agent':
-      case 'decision': {
+      case 'agent': {
         const outcome = await runAgentWithRetry(node)
         ctx.lastNodeId = nodeId
         if (outcome.ok) {
           if (outcome.store !== undefined) ctx.state[outcome.store] = outcome.value
           return { kind: 'ok' }
         }
-        const p = node.onError ?? ctx.spec.onError
-        if (p !== undefined && p.kind === 'continue') {
-          ctx.state[outcome.store ?? p.store ?? nodeId] = { error: outcome.error ?? 'agent failed' }
-          return { kind: 'ok' }
+        return handleAgentFailure(node, nodeId, outcome)
+      }
+      case 'decision': {
+        const outcome = await runAgentWithRetry(node)
+        ctx.lastNodeId = nodeId
+        if (!outcome.ok) return handleAgentFailure(node, nodeId, outcome)
+        if (outcome.store !== undefined) ctx.state[outcome.store] = outcome.value
+        // Route by the selected output field's String value (decision routing).
+        const value = outcome.value as Record<string, unknown> | undefined
+        const route = node.routeField !== undefined ? value?.[node.routeField] : undefined
+        const key = route === undefined ? undefined : String(route)
+        const target = key !== undefined && node.cases[key] !== undefined ? node.cases[key] : node.default
+        if (target === undefined) {
+          return { kind: 'error', node: nodeId, message: `decision: no case matches "${key ?? 'undefined'}" and no default` }
         }
-        if (p !== undefined && p.kind === 'goto') {
-          ctx.stack.length = 0
-          ctx.stack.push({ type: 'seq', refs: [p.node], index: 0, checkpoint: false })
-          return { kind: 'ok' }
-        }
-        return { kind: 'error', node: nodeId, message: outcome.error ?? `node ${nodeId} failed` }
+        const refs: (string | FlowNode)[] = Array.isArray(target) ? target : [target]
+        ctx.stack.push({ type: 'seq', refs, index: 0, checkpoint: false })
+        return { kind: 'ok' }
       }
       case 'parallel': {
         const signals = await Promise.all(node.branches.map(b => execBranchList(b)))

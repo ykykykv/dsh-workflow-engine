@@ -45,6 +45,8 @@ export interface DecisionNode {
   task: string
   outputSchema: JsonSchema
   store: string
+  /** Field of the structured output whose String value selects `cases`. */
+  routeField?: string
   cases: Record<string, string | string[]>
   default?: string | string[]
   timeoutMs?: number

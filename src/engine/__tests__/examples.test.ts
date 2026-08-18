@@ -5,13 +5,14 @@ import { defaultReaders } from '../readers.ts'
 import { runOrchestrator, type OrchestratorHooks } from '../orchestrator.ts'
 import type { AgentConfig, FlowSpec } from '../../types.ts'
 
-const EXAMPLES = ['guess-number', 'guess-number-shared', 'task-decomposition', 'analysis-report']
+const EXAMPLES = ['guess-number', 'guess-number-shared', 'analysis-report', 'task-decomposition', 'roundtable']
 
 const REQUIRED_INPUT: Record<string, Record<string, unknown>> = {
   'guess-number': {},
   'guess-number-shared': {},
   'task-decomposition': { bigTask: 'ship a release' },
   'analysis-report': { subject: 'AI agents in 2026' },
+  'roundtable': { topic: 'should we adopt Conventional Commits' },
 }
 
 describe('examples', () => {
@@ -82,7 +83,7 @@ describe('example flow orchestration (dry-run, scripted agents)', () => {
     const loaded = await loadFlow({ flow: 'guess-number', input: {} })
     let refereeCalls = 0
     const hooks = scriptedHooks(loaded.spec, loaded.agents)
-    hooks.runAgent = async (node) => {
+    hooks.runAgent = async (node, taskText) => {
       if (node.agent === 'referee') {
         refereeCalls++
         return { ok: true, store: node.store, value: refereeCalls === 1 ? { secret: 7 } : { correct: refereeCalls >= 3 } }
@@ -99,9 +100,28 @@ describe('example flow orchestration (dry-run, scripted agents)', () => {
     expect(history.length).toBe(2) // g0 wrong, g1 correct
     expect(refereeCalls).toBe(3) // init + 2 judgments
   })
+
+  it('roundtable converges and completes with a report (decision routing)', async () => {
+    const loaded = await loadFlow({ flow: 'roundtable', input: { topic: 'test topic' } })
+    const hooks = scriptedHooks(loaded.spec, loaded.agents)
+    const r = await runOrchestrator(loaded.spec, loaded.agents, loaded.input, loaded.spec.entry, hooks, undefined, { flowId: 'roundtable', runId: 'r1' })
+    expect(r.stopReason).toBe('completed')
+    const minutes = (r.state['minutes'] ?? []) as unknown[]
+    expect(minutes.length).toBe(1) // converged on round 1
+    expect(r.state['reportPath']).toContain('scribe')
+  })
+
+  it('roundtable fails when no convergence by the round cap', async () => {
+    const loaded = await loadFlow({ flow: 'roundtable', input: { topic: 'test topic' } })
+    const hooks = scriptedHooks(loaded.spec, loaded.agents, { neverConverge: true })
+    const r = await runOrchestrator(loaded.spec, loaded.agents, loaded.input, loaded.spec.entry, hooks, undefined, { flowId: 'roundtable', runId: 'r1' })
+    expect(r.stopReason).toBe('failed')
+    const minutes = (r.state['minutes'] ?? []) as unknown[]
+    expect(minutes.length).toBe(4) // ran all 4 rounds, then fail
+  })
 })
 
-function scriptedHooks(spec: FlowSpec, agents: Record<string, AgentConfig>, opts: { alwaysFail?: boolean } = {}): OrchestratorHooks {
+function scriptedHooks(spec: FlowSpec, agents: Record<string, AgentConfig>, opts: { alwaysFail?: boolean; neverConverge?: boolean } = {}): OrchestratorHooks {
   const seq: Record<string, number> = {}
   return {
     async runAgent(node) {
@@ -117,6 +137,10 @@ function scriptedHooks(spec: FlowSpec, agents: Record<string, AgentConfig>, opts
         case 'smallReviewer': return { ok: true, store: node.store, value: { verdict: 'pass', guidance: '' } }
         case 'resplitReviewer': return { ok: true, store: node.store, value: { problems: 'p', advice: 'advice' } }
         case 'reporter': return { ok: true, store: node.store, value: 'reported' }
+        case 'supporter': return { ok: true, store: node.store, value: 'support view' }
+        case 'critic': return { ok: true, store: node.store, value: 'critic view' }
+        case 'chair': return { ok: true, store: node.store, value: { converged: !opts.neverConverge, feedback: 'feedback' } }
+        case 'scribe': return { ok: true, store: node.store, value: 'written' }
         default: return { ok: true, store: node.store, value: `out-${n}` }
       }
     },
