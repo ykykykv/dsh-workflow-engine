@@ -100,6 +100,29 @@ describe('validate', () => {
     }
     expect(validateFlowSpec(spec, agents, { x: 1, list: [] }, readers).ok).toBe(true)
   })
+  it('rejects nodes not reachable from the entry', () => {
+    const spec: FlowSpec = {
+      ...base,
+      nodes: {
+        main: { kind: 'set', assign: { x: '1' } },
+        orphan: { kind: 'agent', agent: 'a', task: 'never runs' },
+      },
+    }
+    const r = validateFlowSpec(spec, agents, { x: 1, list: [] }, readers)
+    expect(r.ok).toBe(false)
+    expect(r.errors.join('; ')).toContain('not reachable')
+  })
+  it('passes when every node is reachable from the entry', () => {
+    const spec: FlowSpec = {
+      ...base,
+      nodes: {
+        main: { kind: 'sequence', nodes: ['a', 'b'] },
+        a: { kind: 'set', assign: { x: '1' } },
+        b: { kind: 'set', assign: { y: '{state.x}2' } },
+      },
+    }
+    expect(validateFlowSpec(spec, agents, { x: 1, list: [] }, readers).ok).toBe(true)
+  })
   it('validates agents config', () => {
     expect(validateAgents(agents).ok).toBe(true)
     expect(validateAgents({ a: { id: 'a', persona: 'p', model: { provider: 'x', model: 'y' }, memory: 'bogus' } as never }).ok).toBe(false)

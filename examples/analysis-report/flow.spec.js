@@ -3,7 +3,7 @@
 // workspace; the engine collects the declared output to outputDir/<runId>/.
 export default {
   name: 'analysis-report',
-  description: 'Analyze a subject (optionally reading a source directory) and produce a reviewed Markdown report file.',
+  description: 'Analyze a subject (optionally reading a source directory) and produce a reviewed Markdown report file. Input contract: input.subject (required string); input.sourceDir (optional string path, absolute or relative to the session workspace).',
   state: {
     subject: { type: 'string', required: true },
     sourceDir: { type: 'string' },
@@ -16,8 +16,9 @@ export default {
   defaults: { timeoutMs: 120000, runTimeoutMs: 3600000 },
   onError: { kind: 'abort' },
   outputs: ['{flowId}/runs/{runId}/workspace/writer/output/report.md'],
-  entry: 'analyze',
+  entry: 'flow',
   nodes: {
+    flow: { kind: 'sequence', nodes: ['setReportPath', 'analyze', 'reportLoop'] },
     analyze: {
       kind: 'agent', agent: 'analyst',
       task: '分析主题："{subject}"。资料目录：{sourceDir ?? 无（基于你的知识分析）}。若资料目录存在，请用 read/文件搜索工具阅读其中的材料作为依据，然后给出你的分析要点（结构清晰，中文）。',

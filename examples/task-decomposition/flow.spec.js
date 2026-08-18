@@ -5,7 +5,7 @@
 // Overall attempt cap without all-pass -> the run fails.
 export default {
   name: 'task-decomposition',
-  description: 'Task supervisor splits a large task; per-task parallel pro/con analysis with reviewer loop; failures trigger re-split (capped); cap exhaustion fails the run.',
+  description: 'Task supervisor splits a large task; per-task parallel pro/con analysis with reviewer loop; failures trigger re-split (capped); cap exhaustion fails the run. Input contract: input.bigTask (required string).',
   state: {
     bigTask: { type: 'string', required: true },
     splitResult: { type: 'json' },

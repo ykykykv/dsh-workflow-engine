@@ -49,6 +49,34 @@ export function collectAgentIds(spec: FlowSpec, refs: (string | FlowNode)[]): st
   return out
 }
 
+/** Collect every named node reachable from `entry` (guards against dead
+ * nodes that are declared but never wired into the flow). */
+function collectReachableNamedNodes(spec: FlowSpec): Set<string> {
+  const visited = new Set<string>()
+  const walkRefs = (refs: (string | FlowNode)[]): void => {
+    for (const r of refs) walk(r)
+  }
+  const walkDecision = (node: Extract<FlowNode, { kind: 'decision' }>): void => {
+    for (const caseRef of Object.values(node.cases)) walkRefs(asRefList(caseRef))
+    if (node.default !== undefined) walkRefs(asRefList(node.default))
+  }
+  const walk = (ref: string | FlowNode): void => {
+    if (typeof ref === 'string') {
+      if (visited.has(ref)) return
+      const node = spec.nodes[ref]
+      if (!node) return
+      visited.add(ref)
+      walkRefs(nodeRefs(node))
+      if (node.kind === 'decision') walkDecision(node)
+      return
+    }
+    walkRefs(nodeRefs(ref))
+    if (ref.kind === 'decision') walkDecision(ref)
+  }
+  walk(spec.entry)
+  return visited
+}
+
 function validateStateField(key: string, f: StateFieldSpec, errors: string[]): void {
   if (!STATE_TYPES.includes(f.type)) {
     errors.push(`state.${key}: unknown type "${f.type}"`)
@@ -200,6 +228,14 @@ export function validateFlowSpec(
   }
 
   for (const [id, node] of Object.entries(spec.nodes)) validateNode(id, node)
+
+  // Dead-node guard: every declared node must be reachable from the entry.
+  if (spec.nodes[spec.entry] !== undefined) {
+    const reachable = collectReachableNamedNodes(spec)
+    for (const id of Object.keys(spec.nodes)) {
+      if (!reachable.has(id)) errors.push(`node ${id}: not reachable from entry`)
+    }
+  }
 
   // Parallel same-session-agent conflict (G2): a parallel must not reuse a
   // `memory: session` agent across more than one branch.

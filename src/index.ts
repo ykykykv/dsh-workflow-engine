@@ -44,9 +44,11 @@ export function apply(ctx: Context, config: Config = {}): void {
     description:
       'Run a declarative multi-agent workflow described by a flow spec (flow spec + agents config). ' +
       'Supports serial/parallel/conditional/loop orchestration, schema-validated decision agents, ' +
-      'checkpoint pause-resume by runId, and per-agent memory. flow resolves by path, built-in name, ' +
-      'or the configured default. Long workflows return "paused" with a runId when runTimeoutMs elapses; ' +
-      'resume with the same flow and resumeRunId.',
+      'checkpoint pause-resume by runId, per-agent memory, and collected report outputs. flow resolves by path, ' +
+      'built-in name, or the configured default. Long workflows return "paused" with a runId when runTimeoutMs elapses; ' +
+      'resume with the same flow and resumeRunId. When the user describes a task in natural language, map it onto the ' +
+      "flow's input fields; if unsure of the field names, read <flow-directory>/flow.spec.js first (its description " +
+      'declares the required/optional input contract).',
     parameters: {
       flow: { type: 'string', description: 'Path to a flow directory or a built-in name. Default: configured defaultExample.' },
       input: { type: 'object', additionalProperties: true, description: 'Initial run-state input, validated against the spec state shape. A string value "@file:<path>" imports that file\'s content.' },
@@ -92,7 +94,7 @@ async function runWorkflow(
     const checkpointPath = join(workspaceRoot, flowId, 'runs', runId, 'checkpoint.json')
 
     // Materialize agents (pure write, regenerate each run).
-    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.7' })
+    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.8' })
 
     const monitor = exec.agent ? createMonitor(exec.agent.session, runId) : null
     const specHash = hashSpec(loaded.spec, loaded.agents)

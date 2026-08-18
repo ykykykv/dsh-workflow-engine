@@ -1,7 +1,7 @@
 // guess-number (variant b): each guesser sees the FULL shared history.
 export default {
   name: 'guess-number-shared',
-  description: 'Guessing game: three guessers guess a secret 0-10 until correct (variant b: full shared history).',
+  description: 'Guessing game: three guessers guess a secret 0-10 until correct (variant b: full shared history). No input required.',
   state: {
     secret: { type: 'number' },
     guess: { type: 'string' },

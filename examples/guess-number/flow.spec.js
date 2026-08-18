@@ -1,7 +1,7 @@
 // guess-number (variant a): each guesser only sees its own guess/reply history.
 export default {
   name: 'guess-number',
-  description: 'Guessing game: three guessers guess a secret 0-10 one at a time until correct (variant a: own history only).',
+  description: 'Guessing game: three guessers guess a secret 0-10 one at a time until correct (variant a: own history only). No input required.',
   state: {
     secret: { type: 'number' },
     guess: { type: 'string' },
