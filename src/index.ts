@@ -16,6 +16,7 @@ import { createMonitor } from './engine/monitor.ts'
 import { runOrchestrator, type OrchestratorHooks } from './engine/orchestrator.ts'
 import type { Frame } from './types.ts'
 import { hashSpec, parseCheckpoint, resumeAllowed, serializeCheckpoint, atomicWriteFile } from './engine/checkpoint.ts'
+import { assertSafeId } from './engine/validate.ts'
 import { defaultReaders } from './engine/readers.ts'
 
 export const name = '@deepseek-ai/dsh-workflow-engine'
@@ -87,7 +88,11 @@ async function runWorkflow(
   const flowRef = typeof args.flow === 'string' && args.flow !== '' ? args.flow : undefined
   const outputDirArg = typeof args.outputDir === 'string' && args.outputDir !== '' ? args.outputDir : undefined
 
+  let runTimer: NodeJS.Timeout | undefined
+  const clearRunTimer = (): void => { if (runTimer !== undefined) { clearTimeout(runTimer); runTimer = undefined } }
   try {
+    // Run-level time budget controller (armed after the flow loads).
+    let runAbort: AbortController | undefined
     if (flowRef === 'list') {
       const builtins = await listBuiltins()
       return truncate(JSON.stringify({ stopReason: 'completed', runId: null, result: { builtins } }, null, 2), resolved.maxResultChars)
@@ -95,12 +100,16 @@ async function runWorkflow(
     const workspaceRoot = exec.agent?.session.header.cwd ?? process.cwd()
     const loaded = await loadFlow({ flow: flowRef, defaultName: resolved.defaultExample, input, baseDir: workspaceRoot })
     const flowId = loaded.spec.name
+    if (resumeRunId !== undefined) {
+      const err = assertSafeId('resumeRunId', resumeRunId)
+      if (err !== null) throw new Error(`run_workflow: ${err}`)
+    }
     const runId = resumeRunId ?? newRunId()
     const parentPreset = (exec.agent?.session.header as unknown as { agentPreset?: string }).agentPreset
     const checkpointPath = join(workspaceRoot, flowId, 'runs', runId, 'checkpoint.json')
 
     // Materialize agents (pure write, regenerate each run).
-    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.13' })
+    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.14' })
 
     const monitor = exec.agent ? createMonitor(exec.agent.session, runId) : null
     const specHash = hashSpec(loaded.spec, loaded.agents)
@@ -123,6 +132,14 @@ async function runWorkflow(
     const runner = new AgentRunner(ctx, flowId, runId, workspaceRoot, parentPreset, seedSessions)
     let seq = 0
 
+    // Arm the run-level time budget: the wall-clock timer aborts the in-flight
+    // agent so a pause interrupts work instead of waiting for the node to end.
+    runAbort = new AbortController()
+    const runBudget = loaded.spec.defaults?.runTimeoutMs ?? resolved.runTimeoutMs
+    if (runBudget > 0) {
+      runTimer = setTimeout(() => runAbort?.abort(), runBudget)
+    }
+
     const saveCheckpoint = async (snapshot: { lastNodeId: string | null; stack: Frame[]; state: Record<string, unknown> }): Promise<void> => {
       const cp: Checkpoint = {
         flowId, runId, specHash,
@@ -137,6 +154,7 @@ async function runWorkflow(
 
     const hooks: OrchestratorHooks = {
       async runAgent(node, taskText) {
+        if (runAbort?.signal.aborted) return { ok: false, error: 'run paused (timeout)' }
         seq++
         const childId = runner.sessionId(node.agent)
         monitor?.agentStart(seq, node.agent, undefined, childId)
@@ -147,7 +165,7 @@ async function runWorkflow(
           taskText,
           structured: node.outputSchema ? { schema: node.outputSchema } : undefined,
           timeoutMs: clampTimeout(node.timeoutMs ?? loaded.spec.defaults?.timeoutMs, resolved.defaultTimeoutMs, resolved.maxTimeoutMs),
-          signal: exec.signal,
+          signal: AbortSignal.any([runAbort!.signal, exec.signal]),
         })
         monitor?.agentEnd(seq, result.ok ? 'completed' : 'failed')
         return { ok: result.ok, store: node.store, value: result.value, error: result.error }
@@ -158,12 +176,14 @@ async function runWorkflow(
       checkpoint: saveCheckpoint,
       onPhase: (title) => { console.log(`[workflow:${flowId}] phase ${title}`) },
       isCancelled: () => exec.signal.aborted,
+      isRunPaused: () => runAbort?.signal.aborted === true,
       now: () => Date.now(),
       runTimeoutMs: () => loaded.spec.defaults?.runTimeoutMs ?? resolved.runTimeoutMs,
       readers: defaultReaders(),
     }
 
     const result = await runOrchestrator(loaded.spec, loaded.agents, initialState, loaded.spec.entry, hooks, restore, { flowId, runId })
+    clearRunTimer()
     monitor?.runEnd(result.stopReason)
 
     // Session disposition (G1): completed/failed dispose run sessions.
@@ -186,6 +206,7 @@ async function runWorkflow(
     }
     return truncate(JSON.stringify(payload, null, 2), resolved.maxResultChars)
   } catch (error) {
+    clearRunTimer()
     return truncate(JSON.stringify({ stopReason: 'error', runId: resumeRunId ?? null, error: { node: 'run_workflow', message: String((error as Error).message ?? error), checkpointPath: '' } }, null, 2), resolved.maxResultChars)
   }
 }

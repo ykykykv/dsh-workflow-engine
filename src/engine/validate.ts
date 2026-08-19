@@ -14,6 +14,15 @@ export interface ValidationResult {
   errors: string[]
 }
 
+/** Safe filesystem id: letters/digits/underscore/hyphen (used for flowId,
+ * agentId, runId — all become path segments). */
+export function assertSafeId(name: string, value: unknown): string | null {
+  if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(value)) {
+    return `${name} must be a non-empty string of [a-zA-Z0-9_-]`
+  }
+  return null
+}
+
 const STATE_TYPES = ['string', 'number', 'boolean', 'json', 'array']
 
 export function asRefList(ref: string | string[]): (string | FlowNode)[] {
@@ -149,6 +158,10 @@ export function validateFlowSpec(
   const errors: string[] = []
   if (spec === null || typeof spec !== 'object') return { ok: false, errors: ['spec: expected an object'] }
   if (typeof spec.name !== 'string' || spec.name === '') errors.push('spec: missing name')
+  else {
+    const idErr = assertSafeId('spec.name', spec.name)
+    if (idErr !== null) errors.push(`spec: ${idErr}`)
+  }
   if (typeof spec.entry !== 'string' || spec.entry === '') errors.push('spec: missing entry')
 
   // state shape
@@ -283,6 +296,8 @@ export function validateAgents(agents: Record<string, AgentConfig>): ValidationR
   const errors: string[] = []
   for (const [id, a] of Object.entries(agents)) {
     if (a === null || typeof a !== 'object') { errors.push(`agent ${id}: expected an object`); continue }
+    const idErr = assertSafeId(`agent id`, id)
+    if (idErr !== null) errors.push(`agent ${id}: ${idErr}`)
     if (typeof a.persona !== 'string') errors.push(`agent ${id}: persona must be a string`)
     if (!a.model || typeof a.model !== 'object' || typeof a.model.provider !== 'string' || typeof a.model.model !== 'string') {
       errors.push(`agent ${id}: model.provider/model required`)

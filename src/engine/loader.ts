@@ -6,7 +6,7 @@
  * @module @deepseek-ai/dsh-workflow-engine/loader
  */
 
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { readFile, readdir } from 'node:fs/promises'
 import type { AgentConfig, FlowSpec } from '../types.ts'
@@ -16,20 +16,23 @@ import { defaultReaders } from './readers.ts'
 /** Cap for `@file:` input expansion. */
 const MAX_FILE_INPUT_BYTES = 1024 * 1024
 
+/** Absolute path to the package's shipped `examples/` directory. */
+function examplesDir(): string {
+  return fileURLToPath(new URL('../../examples/', import.meta.url))
+}
+
 /** List the shipped built-in flow names (directories with agents.js + flow.spec.js). */
 export async function listBuiltins(): Promise<string[]> {
-  const examplesUrl = new URL('../../examples/', import.meta.url)
-  const examplesDir = decodeURIComponent(examplesUrl.pathname.replace(/^\/([A-Za-z]:)/, '$1'))
   const names: string[] = []
   let entries: { isDirectory(): boolean; name: string }[]
   try {
-    entries = await readdir(examplesDir, { withFileTypes: true }) as unknown as { isDirectory(): boolean; name: string }[]
+    entries = await readdir(examplesDir(), { withFileTypes: true }) as unknown as { isDirectory(): boolean; name: string }[]
   } catch {
     return names
   }
   for (const e of entries) {
     if (!e.isDirectory()) continue
-    if (await exists(join(examplesDir, e.name, 'flow.spec.js'))) names.push(e.name)
+    if (await exists(join(examplesDir(), e.name, 'flow.spec.js'))) names.push(e.name)
   }
   return names.sort()
 }
@@ -62,8 +65,7 @@ export async function loadFlow(opts: LoadOptions): Promise<LoadedFlow> {
     dir = resolve(baseDir, ref)
   } else {
     // Built-in name → the package's shipped examples/<name>.
-    const examplesUrl = new URL('../../examples/', import.meta.url)
-    dir = join(decodeURIComponent(examplesUrl.pathname.replace(/^\/([A-Za-z]:)/, '$1')), ref)
+    dir = join(examplesDir(), ref)
     asBuiltIn = true
     if (!(await exists(join(dir, 'agents.js'))) && !(await exists(join(dir, 'flow.spec.js')))) {
       dir = resolve(baseDir, ref)

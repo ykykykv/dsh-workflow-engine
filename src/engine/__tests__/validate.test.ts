@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { validateFlowSpec, validateAgents } from '../validate.ts'
+import { validateFlowSpec, validateAgents, assertSafeId } from '../validate.ts'
 import { defaultReaders } from '../readers.ts'
 import type { AgentConfig, FlowSpec } from '../../types.ts'
 
@@ -142,5 +142,17 @@ describe('validate', () => {
   it('validates agents config', () => {
     expect(validateAgents(agents).ok).toBe(true)
     expect(validateAgents({ a: { id: 'a', persona: 'p', model: { provider: 'x', model: 'y' }, memory: 'bogus' } as never }).ok).toBe(false)
+  })
+  it('rejects unsafe flow names and agent ids (path safety)', () => {
+    const badName: FlowSpec = { ...base, name: '../escape' }
+    expect(validateFlowSpec(badName, agents, { x: 1, list: [] }, readers).ok).toBe(false)
+    const badAgents: Record<string, AgentConfig> = { '../x': { id: '../x', persona: 'p', model: { provider: 'x', model: 'y' }, memory: 'none' } }
+    expect(validateAgents(badAgents).ok).toBe(false)
+  })
+  it('assertSafeId accepts safe ids and rejects traversal/invalid ones', () => {
+    expect(assertSafeId('x', 'ok_id-1')).toBe(null)
+    expect(assertSafeId('x', '../esc')).not.toBe(null)
+    expect(assertSafeId('x', 'a:b')).not.toBe(null)
+    expect(assertSafeId('x', '')).not.toBe(null)
   })
 })

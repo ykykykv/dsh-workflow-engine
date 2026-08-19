@@ -18,6 +18,7 @@ import { SessionId, type Session } from '@deepseek-ai/dsh-session'
 import type { AgentConfig } from '../types.ts'
 import { attachStructuredOutput, type StructuredAttachment } from './structured.ts'
 import { SessionRegistry } from './session-registry.ts'
+import { lastAssistantTextFromEvents } from './text-extract.ts'
 
 export interface AgentPresetsLike {
   mount(ctx: Context, id?: string): Promise<unknown>
@@ -253,17 +254,24 @@ function fuseSignal(signal: AbortSignal | undefined, timeoutMs?: number): FusedS
   }
 }
 
-/** Last assistant message text from a session's derived messages. */
+/** Last assistant message text from a session's derived messages (with a
+ * fallback to event folding when `deriveMessages` is unavailable across rc). */
 export function finalAssistantText(session: Session): string {
-  const messages: Message[] = (session as unknown as { deriveMessages(): Message[] }).deriveMessages()
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]!
-    if (m.role !== 'assistant') continue
-    const parts: string[] = []
-    for (const block of m.content) {
-      if (block.type === 'text') parts.push(block.text)
-    }
-    if (parts.length > 0) return parts.join('\n')
+  const s = session as unknown as { deriveMessages?: () => Message[]; events?: readonly { type: string; data?: { content?: readonly unknown[] } }[] }
+  if (typeof s.deriveMessages === 'function') {
+    try {
+      const messages = s.deriveMessages()
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i]
+        if (!m || m.role !== 'assistant') continue
+        const parts: string[] = []
+        for (const block of m.content) {
+          if (block.type === 'text') parts.push(block.text)
+        }
+        if (parts.length > 0) return parts.join('\n')
+      }
+      return ''
+    } catch { /* fall through to event folding */ }
   }
-  return ''
+  return lastAssistantTextFromEvents(s.events ?? [])
 }

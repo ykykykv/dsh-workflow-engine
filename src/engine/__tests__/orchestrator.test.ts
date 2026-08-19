@@ -181,6 +181,19 @@ describe('orchestrator', () => {
     expect(calls).toBe(3) // 1 initial + 2 retries
   })
 
+  it('pauses (not retries/errors) when the run budget fires mid-node', async () => {
+    const spec: FlowSpec = {
+      name: 's', state: {},
+      entry: 'main',
+      nodes: { main: { kind: 'agent', agent: 'worker', task: 't', store: 'out', onError: { kind: 'retry', max: 2 } } },
+    }
+    let calls = 0
+    const hooks = makeHooks({ runAgent: async () => { calls++; return { ok: false, error: 'interrupted' } }, isRunPaused: () => true })
+    const r = await runOrchestrator(spec, agents, {}, 'main', hooks)
+    expect(r.stopReason).toBe('paused')
+    expect(calls).toBe(1) // no retry; pause wins over onError
+  })
+
   it('fails the run via a fail node', async () => {
     const spec: FlowSpec = {
       name: 's', state: {},

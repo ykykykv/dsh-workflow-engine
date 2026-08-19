@@ -24,6 +24,8 @@ export interface OrchestratorHooks {
   checkpoint(snapshot: { lastNodeId: string | null; stack: Frame[]; state: Record<string, unknown> }): void | Promise<void>
   onPhase(title: string): void
   isCancelled(): boolean
+  /** True when the run-level time budget fired (pause should win over onError). */
+  isRunPaused?(): boolean
   now(): number
   runTimeoutMs(): number
   readers: ReaderRegistry
@@ -126,6 +128,7 @@ export async function runOrchestrator(
       const outcome = await ctx.hooks.runAgent(node, taskText)
       last = outcome
       if (outcome.ok) return outcome
+      if (ctx.hooks.isRunPaused?.()) break // run budget fired: stop retrying, pause wins
     }
     return last
   }
@@ -179,12 +182,16 @@ export async function runOrchestrator(
           if (outcome.store !== undefined) ctx.state[outcome.store] = outcome.value
           return { kind: 'ok' }
         }
+        if (ctx.hooks.isRunPaused?.()) return { kind: 'paused' }
         return handleAgentFailure(node, nodeId, outcome)
       }
       case 'decision': {
         const outcome = await runAgentWithRetry(node)
         ctx.lastNodeId = nodeId
-        if (!outcome.ok) return handleAgentFailure(node, nodeId, outcome)
+        if (!outcome.ok) {
+          if (ctx.hooks.isRunPaused?.()) return { kind: 'paused' }
+          return handleAgentFailure(node, nodeId, outcome)
+        }
         if (outcome.store !== undefined) ctx.state[outcome.store] = outcome.value
         // Route by the selected output field's String value (decision routing).
         const value = outcome.value as Record<string, unknown> | undefined
