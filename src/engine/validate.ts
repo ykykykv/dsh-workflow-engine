@@ -4,6 +4,7 @@
  * @module @deepseek-ai/dsh-workflow-engine/validate
  */
 
+import { isAbsolute } from 'node:path'
 import type { AgentConfig, FlowNode, FlowSpec, StateFieldSpec } from '../types.ts'
 import { checkTemplate } from './template.ts'
 import { checkPredicate } from './predicate.ts'
@@ -299,6 +300,20 @@ export function validateAgents(agents: Record<string, AgentConfig>): ValidationR
     const idErr = assertSafeId(`agent id`, id)
     if (idErr !== null) errors.push(`agent ${id}: ${idErr}`)
     if (typeof a.persona !== 'string') errors.push(`agent ${id}: persona must be a string`)
+    if (a.tools !== undefined) {
+      if (!Array.isArray(a.tools) || !a.tools.every(t => typeof t === 'string')) {
+        errors.push(`agent ${id}: tools must be an array of absolute file paths`)
+      } else if (!a.tools.every(t => isAbsolute(t))) {
+        errors.push(`agent ${id}: tools entries must be absolute paths`)
+      }
+    }
+    if (a.skills !== undefined) {
+      if (!Array.isArray(a.skills) || !a.skills.every(s => typeof s === 'string')) {
+        errors.push(`agent ${id}: skills must be an array of absolute folder paths`)
+      } else if (!a.skills.every(s => isAbsolute(s))) {
+        errors.push(`agent ${id}: skills entries must be absolute paths`)
+      }
+    }
     if (!a.model || typeof a.model !== 'object' || typeof a.model.provider !== 'string' || typeof a.model.model !== 'string') {
       errors.push(`agent ${id}: model.provider/model required`)
     }

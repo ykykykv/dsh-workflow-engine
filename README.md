@@ -52,6 +52,7 @@ run_workflow flow: 'analysis-report' input: { subject: 'AI agents in 2026' }
 run_workflow flow: 'analysis-report' input: { subject: '竞品分析', sourceDir: './materials' }
 run_workflow flow: 'task-decomposition' input: { bigTask: 'ship a release' }
 run_workflow flow: 'roundtable' input: { topic: 'should we adopt Conventional Commits' }
+run_workflow flow: 'file-inspect' input: { file: './docs/notes.md', dir: './docs' }
 run_workflow flow: '/abs/path/to/my-flow'    # any directory with agents.js + flow.spec.js
 run_workflow flow: './my-flow'               # relative to the session workspace
 run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # import a txt/md file as the prompt
@@ -87,10 +88,17 @@ Long runs return `paused` with a `runId` when `runTimeoutMs` elapses; call again
 
 A flow is a directory with two JS data modules:
 
-- `agents.js` — `export const agents = { <id>: { id, persona, model: { provider, model }, memory: 'session'|'none', tools?, promptSections?, presetId? } }`
+- `agents.js` — `export const agents = { <id>: { id, persona, model: { provider, model }, memory: 'session'|'none', tools?, skills?, promptSections?, presetId? } }`
 - `flow.spec.js` — `export default { name, state, defaults?, onError?, outputs?, entry, nodes }`
 
 Node kinds: `agent` / `decision` / `branch` / `sequence` / `parallel` / `map` / `loop` / `set` / `push` / `emit` / `break` / `fail`.
+
+Per-agent tools & skills (loaded from absolute file/folder paths):
+
+- `tools?: string[]` — absolute paths to **ESM plugin-module files** (`.js`/`.mjs`/`.ts`) that export a Cordis plugin (`apply(ctx)`, registering tools via `ctx.tools.register`). Each module is loaded into that agent's scope only. Loading arbitrary code is shell-level trust; missing/invalid modules fail loudly at agent creation.
+- `skills?: string[]` — absolute paths to **skill folders that directly contain `SKILL.md`** (or directories containing multiple skill subfolders). The engine scans their parent as an isolated skill root (`includeDefaultRoots: false`), so only the listed skills are visible to that agent.
+
+`file-inspect` example: `run_workflow flow: 'file-inspect' input: { file: './x.md', dir: './docs' }` reads a specific file and a directory's contents, then produces a report collected via `outputs`.
 
 - Templates: `{state.a.b}`, `{item.x}`, `{loopIndex}`, bare vars (`{t}` for map `as`, bare paths like `{splitResult.tasks}` resolve against `state`), readers (`{filterBy(history, owner, 'g0')}`), `{path ?? fallback}`, and the run facts `{flowId}` / `{runId}`. Lookup only — logic goes in predicates.
 - Input: state fields declared `required: true` must be supplied via `input` for the flow to start (e.g. `bigTask`, `taskText`, `subject`); fields without it may be filled by the flow itself. Long prompts can be imported from a file: `input: { subject: '@file:./docs/需求.md' }`.

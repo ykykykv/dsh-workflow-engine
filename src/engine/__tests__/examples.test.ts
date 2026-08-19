@@ -5,7 +5,7 @@ import { defaultReaders } from '../readers.ts'
 import { runOrchestrator, type OrchestratorHooks } from '../orchestrator.ts'
 import type { AgentConfig, FlowSpec } from '../../types.ts'
 
-const EXAMPLES = ['guess-number', 'guess-number-shared', 'analysis-report', 'task-decomposition', 'roundtable']
+const EXAMPLES = ['guess-number', 'guess-number-shared', 'analysis-report', 'task-decomposition', 'roundtable', 'file-inspect']
 
 const REQUIRED_INPUT: Record<string, Record<string, unknown>> = {
   'guess-number': {},
@@ -13,6 +13,7 @@ const REQUIRED_INPUT: Record<string, Record<string, unknown>> = {
   'task-decomposition': { bigTask: 'ship a release' },
   'analysis-report': { subject: 'AI agents in 2026' },
   'roundtable': { topic: 'should we adopt Conventional Commits' },
+  'file-inspect': { file: './notes.md' },
 }
 
 describe('examples', () => {
@@ -119,6 +120,21 @@ describe('example flow orchestration (dry-run, scripted agents)', () => {
     const minutes = (r.state['minutes'] ?? []) as unknown[]
     expect(minutes.length).toBe(4) // ran all 4 rounds, then fail
   })
+
+  it('file-inspect completes with a report when file is provided', async () => {
+    const loaded = await loadFlow({ flow: 'file-inspect', input: { file: './notes.md' } })
+    const hooks = scriptedHooks(loaded.spec, loaded.agents)
+    const r = await runOrchestrator(loaded.spec, loaded.agents, loaded.input, loaded.spec.entry, hooks, undefined, { flowId: 'file-inspect', runId: 'r1' })
+    expect(r.stopReason).toBe('completed')
+    expect(r.state['reportPath']).toContain('reporter')
+  })
+
+  it('file-inspect fails when neither file nor dir is provided', async () => {
+    const loaded = await loadFlow({ flow: 'file-inspect', input: {} })
+    const hooks = scriptedHooks(loaded.spec, loaded.agents)
+    const r = await runOrchestrator(loaded.spec, loaded.agents, loaded.input, loaded.spec.entry, hooks, undefined, { flowId: 'file-inspect', runId: 'r1' })
+    expect(r.stopReason).toBe('failed')
+  })
 })
 
 function scriptedHooks(spec: FlowSpec, agents: Record<string, AgentConfig>, opts: { alwaysFail?: boolean; neverConverge?: boolean } = {}): OrchestratorHooks {
@@ -141,6 +157,8 @@ function scriptedHooks(spec: FlowSpec, agents: Record<string, AgentConfig>, opts
         case 'critic': return { ok: true, store: node.store, value: 'critic view' }
         case 'chair': return { ok: true, store: node.store, value: { converged: !opts.neverConverge, feedback: 'feedback' } }
         case 'scribe': return { ok: true, store: node.store, value: 'written' }
+        case 'inspector': return { ok: true, store: node.store, value: 'inspected' }
+        case 'reporter': return { ok: true, store: node.store, value: 'written' }
         default: return { ok: true, store: node.store, value: `out-${n}` }
       }
     },

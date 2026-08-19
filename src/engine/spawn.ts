@@ -10,8 +10,9 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { access, mkdir } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, type Message } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session } from '@deepseek-ai/dsh-session'
@@ -183,9 +184,25 @@ export class AgentRunner {
       for (const s of call.config.promptSections ?? []) {
         scope.systemPrompt.section({ name: s.name, order: s.order, text: s.text })
       }
-      // ③ tool filter.
-      if (call.config.tools && call.config.tools.length > 0) {
-        agentCtx.tools.restrict({ allow: call.config.tools })
+      // ③ load per-agent tool plugin modules (absolute paths to ESM plugin files).
+      const host = agentCtx as unknown as { plugin(plugin: unknown, config?: unknown): unknown }
+      for (const entry of call.config.tools ?? []) {
+        const specifier = pathToFileURL(entry).href
+        const mod = await import(specifier) as { default?: unknown }
+        host.plugin(mod.default ?? mod)
+      }
+      // ③b register per-agent skills (absolute skill-folder paths; each entry
+      // directly containing SKILL.md is scanned via its parent root).
+      if (call.config.skills && call.config.skills.length > 0) {
+        const roots = new Set<string>()
+        for (const entry of call.config.skills) {
+          let isDirect = false
+          try { await access(join(entry, 'SKILL.md')); isDirect = true } catch { /* not a direct skill folder */ }
+          roots.add(isDirect ? dirname(entry) : entry)
+        }
+        const specifier = '@deepseek-ai/dsh-skill-filesystem'
+        const skillMod = await import(specifier) as { default?: unknown }
+        host.plugin(skillMod.default ?? skillMod, { providerName: `agent-${call.agentId}`, customSkillDirs: [...roots], includeDefaultRoots: false })
       }
       // ④ structured output (decision nodes only; always fresh-session).
       if (call.structured) {

@@ -144,7 +144,12 @@ export interface FlowSpec {
 export interface AgentConfig {
   id: string
   persona: string
+  /** Absolute paths to ESM plugin-module files (e.g. `D:\\tools\\my-tool.js`) that
+   * export a Cordis plugin (apply) and are loaded into this agent's scope. */
   tools?: string[]
+  /** Absolute paths to skill folders (each directly containing SKILL.md); the
+   * engine scans their parent as a skill root, isolated from default skills. */
+  skills?: string[]
   promptSections?: { name: string; order: number; text: string }[]
   model: { provider: string; model: string }
   memory: 'session' | 'none'

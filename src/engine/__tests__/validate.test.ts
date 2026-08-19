@@ -155,4 +155,12 @@ describe('validate', () => {
     expect(assertSafeId('x', 'a:b')).not.toBe(null)
     expect(assertSafeId('x', '')).not.toBe(null)
   })
+  it('requires tools/skills entries to be absolute paths', () => {
+    const withAbs = { a: { id: 'a', persona: 'p', model: { provider: 'x', model: 'y' }, memory: 'none' as const, tools: ['C:\\tools\\a.js'], skills: ['C:\\skills\\s'] } }
+    expect(validateAgents(withAbs).ok).toBe(true)
+    const withRel = { a: { id: 'a', persona: 'p', model: { provider: 'x', model: 'y' }, memory: 'none' as const, tools: ['./a.js'] } }
+    expect(validateAgents(withRel).ok).toBe(false)
+    const withRelSkill = { a: { id: 'a', persona: 'p', model: { provider: 'x', model: 'y' }, memory: 'none' as const, skills: ['skills/s'] } }
+    expect(validateAgents(withRelSkill).ok).toBe(false)
+  })
 })
