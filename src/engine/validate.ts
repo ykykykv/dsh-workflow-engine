@@ -317,6 +317,9 @@ export function validateAgents(agents: Record<string, AgentConfig>): ValidationR
     if (!a.model || typeof a.model !== 'object' || typeof a.model.provider !== 'string' || typeof a.model.model !== 'string') {
       errors.push(`agent ${id}: model.provider/model required`)
     }
+    if (a.sandbox !== undefined && !['read-only', 'workspace-write', 'danger-full-access'].includes(a.sandbox)) {
+      errors.push(`agent ${id}: sandbox must be 'read-only', 'workspace-write', or 'danger-full-access'`)
+    }
     if (a.memory !== 'session' && a.memory !== 'none') errors.push(`agent ${id}: memory must be 'session' or 'none'`)
   }
   return { ok: errors.length === 0, errors }

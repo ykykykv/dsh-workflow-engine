@@ -88,7 +88,7 @@ Long runs return `paused` with a `runId` when `runTimeoutMs` elapses; call again
 
 A flow is a directory with two JS data modules:
 
-- `agents.js` — `export const agents = { <id>: { id, persona, model: { provider, model }, memory: 'session'|'none', tools?, skills?, promptSections?, presetId? } }`
+- `agents.js` — `export const agents = { <id>: { id, persona, model: { provider, model }, memory: 'session'|'none', tools?, skills?, sandbox?, promptSections?, presetId? } }`
 - `flow.spec.js` — `export default { name, state, defaults?, onError?, outputs?, entry, nodes }`
 
 Node kinds: `agent` / `decision` / `branch` / `sequence` / `parallel` / `map` / `loop` / `set` / `push` / `emit` / `break` / `fail`.
@@ -97,6 +97,7 @@ Per-agent tools & skills (loaded from absolute file/folder paths):
 
 - `tools?: string[]` — absolute paths to **ESM plugin-module files** (`.js`/`.mjs`/`.ts`) that export a Cordis plugin (`apply(ctx)`, registering tools via `ctx.tools.register`). Each module is loaded into that agent's scope only. Loading arbitrary code is shell-level trust; missing/invalid modules fail loudly at agent creation.
 - `skills?: string[]` — absolute paths to **skill folders that directly contain `SKILL.md`** (or directories containing multiple skill subfolders). The engine scans their parent as an isolated skill root (`includeDefaultRoots: false`), so only the listed skills are visible to that agent.
+- `sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'` — optional **per-agent** sandbox override seeded onto the agent session at materialization (mirrors the platform's `source: 'delegation'` events). Default (unset) follows the deployment/session policy. `danger-full-access` **bypasses confinement** so the agent's shell tools run unrestricated — required for tools that must spawn piped child processes (e.g. `playwright-cli`'s daemon uses `stdio: 'pipe'`, which fails with `EPERM` under a restricted token). Opt in explicitly per agent; treat it as shell-level trust.
 
 `file-inspect` example: `run_workflow flow: 'file-inspect' input: { file: './x.md', dir: './docs' }` reads a specific file and a directory's contents, then produces a report collected via `outputs`.
 

@@ -163,4 +163,12 @@ describe('validate', () => {
     const withRelSkill = { a: { id: 'a', persona: 'p', model: { provider: 'x', model: 'y' }, memory: 'none' as const, skills: ['skills/s'] } }
     expect(validateAgents(withRelSkill).ok).toBe(false)
   })
+  it('accepts valid sandbox modes and rejects unknown ones', () => {
+    for (const mode of ['read-only', 'workspace-write', 'danger-full-access'] as const) {
+      const ok = { a: { id: 'a', persona: 'p', model: { provider: 'x', model: 'y' }, memory: 'none' as const, sandbox: mode } }
+      expect(validateAgents(ok).ok).toBe(true)
+    }
+    const bad = { a: { id: 'a', persona: 'p', model: { provider: 'x', model: 'y' }, memory: 'none' as const, sandbox: 'everything' } } as never
+    expect(validateAgents(bad).ok).toBe(false)
+  })
 })

@@ -204,6 +204,14 @@ export class AgentRunner {
         const skillMod = await import(specifier) as { default?: unknown }
         host.plugin(skillMod.default ?? skillMod, { providerName: `agent-${call.agentId}`, customSkillDirs: [...roots], includeDefaultRoots: false })
       }
+      // ③c optional per-agent sandbox override, seeded like the platform's own
+      // delegation events. Under the restricted token, piped child spawns
+      // (playwright-cli's daemon uses stdio:'pipe') fail with EPERM; opting an
+      // agent into danger-full-access lets such tools run unconfinied.
+      if (call.config.sandbox !== undefined) {
+        const agentSession = (agentCtx as unknown as { agent?: { session?: { append(kind: string, data: unknown): void } } }).agent?.session
+        agentSession?.append('sandbox/mode', { mode: call.config.sandbox, source: 'delegation' })
+      }
       // ④ structured output (decision nodes only; always fresh-session).
       if (call.structured) {
         attach = attachStructuredOutput(agentCtx, call.structured.schema)

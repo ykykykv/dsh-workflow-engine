@@ -69,6 +69,8 @@ run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导
 
 加载 `flow.spec.js` / `agents.js` **会执行任意代码**——请像对待 bash 脚本一样对待 flow 目录（shell 级信任）。spawn 出的 agent 继承部署默认预设（可能含 shell 工具），受会话权限预设约束（默认 `workspace-write`）。
 
+`agents.js` 支持可选 **`sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'`** 逐 agent 覆盖：未设置时走部署/会话默认策略；设为 `danger-full-access` 会让该 agent 的 shell 工具**绕过沙箱**（无受限 token）——需要派生 piped 子进程的工具（如 `playwright-cli` 的 daemon 用 `stdio:'pipe'`，受限 token 下会 EPERM）必须用此模式。逐 agent 显式开启，等同 shell 级信任。
+
 ## 开发
 
 ```sh

@@ -151,6 +151,12 @@ export interface AgentConfig {
    * engine scans their parent as a skill root, isolated from default skills. */
   skills?: string[]
   promptSections?: { name: string; order: number; text: string }[]
+  /** Optional per-agent sandbox override seeded onto the agent session at
+   * materialization (mirrors the platform's `source: 'delegation'` events).
+   * `danger-full-access` bypasses confinement — browser/playwright skills need
+   * it because piped child spawns (stdio:'pipe') fail with EPERM under a
+   * restricted token. Opt-in per agent; default is the deployment policy. */
+  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
   model: { provider: string; model: string }
   memory: 'session' | 'none'
   maxTokens?: number
