@@ -18,17 +18,23 @@ import { createUserMessage, type Message } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session } from '@deepseek-ai/dsh-session'
 import type { AgentConfig } from '../types.ts'
 import { attachStructuredOutput, type StructuredAttachment } from './structured.ts'
+import { mountPreset, type AgentPresetsLike } from './preset-mount.ts'
 import { SessionRegistry } from './session-registry.ts'
 import { lastAssistantTextFromEvents } from './text-extract.ts'
-
-export interface AgentPresetsLike {
-  mount(ctx: Context, id?: string): Promise<unknown>
-}
 
 /** Minimal systemPrompt surface (plain type, cast via unknown: Context may or may
  * not be augmented with `systemPrompt` depending on the installed seam set). */
 interface PromptScope {
   systemPrompt: { section(s: { name: string; order: number; text: string }): unknown }
+}
+
+/** Minimal agent surface used from the setup callback. dsh 0.2.x passes the
+ * agent as setup's second argument; older versions exposed it on the context.
+ * `session.append` is duck-typed because `sandbox/mode` is contributed by the
+ * sandbox-policy seam, not the base SessionEventMap. */
+interface AgentLike {
+  session?: { append(kind: string, data: unknown): void }
+  cancel?(cause: unknown): void
 }
 
 export interface SpawnCall {
@@ -172,12 +178,12 @@ export class AgentRunner {
     // Ensure the agent's run-isolated workspace directory exists.
     await mkdir(this.workspaceDir(call.agentId), { recursive: true })
     let attach: StructuredAttachment | undefined
-    const setup = async (agentCtx: Context): Promise<void> => {
+    const setup = async (agentCtx: Context, agentArg?: AgentLike): Promise<void> => {
       const scope = agentCtx as unknown as PromptScope
       // ① preset mount (G3/#16) — required so the spawned agent has tools.
       const presets = this.ctx.get('agentPresets') as AgentPresetsLike | undefined
       if (presets !== undefined) {
-        await presets.mount(agentCtx, call.config.presetId ?? this.parentPreset)
+        await mountPreset(presets, agentCtx, call.config.presetId ?? this.parentPreset)
       }
       // ② persona + prompt sections.
       scope.systemPrompt.section({ name: 'persona', order: 0, text: call.config.persona })
@@ -209,7 +215,8 @@ export class AgentRunner {
       // (playwright-cli's daemon uses stdio:'pipe') fail with EPERM; opting an
       // agent into danger-full-access lets such tools run unconfinied.
       if (call.config.sandbox !== undefined) {
-        const agentSession = (agentCtx as unknown as { agent?: { session?: { append(kind: string, data: unknown): void } } }).agent?.session
+        const ctxAgent = (agentCtx as unknown as { agent?: AgentLike }).agent
+        const agentSession = (agentArg ?? ctxAgent)?.session
         agentSession?.append('sandbox/mode', { mode: call.config.sandbox, source: 'delegation' })
       }
       // ④ structured output (decision nodes only; always fresh-session).
@@ -231,7 +238,7 @@ export class AgentRunner {
 
   private async drive(agent: import('@deepseek-ai/dsh-agent').Agent, taskText: string, signal?: AbortSignal, timeoutMs?: number): Promise<{ ok: boolean; error?: string }> {
     const fused = fuseSignal(signal, timeoutMs)
-    const onAbort = (): void => { try { (agent as unknown as { cancel(cause: string): void }).cancel('run aborted') } catch { /* noop */ } }
+    const onAbort = (): void => { try { (agent as unknown as { cancel(cause: unknown): void }).cancel({ kind: 'hook', reason: 'workflow run aborted' }) } catch { /* noop */ } }
     if (fused.signal.aborted) {
       onAbort()
       return { ok: false, error: fused.cause() === 'timeout' ? `agent run timed out after ${timeoutMs ?? '?'}ms` : 'agent run aborted (cancelled)' }

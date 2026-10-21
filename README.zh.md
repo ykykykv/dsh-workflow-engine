@@ -65,6 +65,12 @@ run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导
 - 物化的 `agent.cordis.yml` 是配置参考快照（模型路由/记忆/工具选择属引擎），非可独立运行的完整预设。
 - Windows：示例用纯 LLM 推理；用 shell 工具的 flow 经挂载预设走平台分支。
 
+## 兼容性
+
+- 同时支持 dsh **0.1.x** 与 **0.2.x**：`AgentConfig.sandbox` 的会话种入同时读取 setup 的 `agent` 参数（0.2.x）与 `agentCtx.agent`（0.1.x）；`agent.cancel` 使用平台的 `AgentCancelCause` 对象形式。
+- 预设 id 跨版本别名：dsh 0.2.x 把内置预设 `code` 更名为 `ptc`；`AgentConfig.presetId` 写 `code` 或 `ptc` 都会自动回退到对方（仅在"未知预设"错误时回退一次）。
+- 0.2.x 的内置预设默认带 `web_search`/`web_fetch`（静态页可直接抓取）；需要 JS 渲染或浏览器自动化的场景仍建议用 `playwright-cli` 技能 + `sandbox: 'danger-full-access'`。
+
 ## 信任模型
 
 加载 `flow.spec.js` / `agents.js` **会执行任意代码**——请像对待 bash 脚本一样对待 flow 目录（shell 级信任）。spawn 出的 agent 继承部署默认预设（可能含 shell 工具），受会话权限预设约束（默认 `workspace-write`）。

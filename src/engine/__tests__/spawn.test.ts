@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { SessionRegistry } from '../session-registry.ts'
+import { mountPreset, type AgentPresetsLike } from '../preset-mount.ts'
+import type { Context } from '@deepseek-ai/cordis'
+
+const ctx = {} as Context
+
+function notFound(id: string): Error {
+  return Object.assign(new Error(`Unknown agent preset: ${id}`), { code: 'agent-preset/not-found' })
+}
 
 describe('SessionRegistry seeding (resume)', () => {
   it('returns the seeded session id for a resumed agent', () => {
@@ -17,5 +25,40 @@ describe('SessionRegistry seeding (resume)', () => {
     expect(fresh).not.toBe('old-uuid')
     expect(reg.isResuming('c')).toBe(false)
     expect(reg.map()).toEqual({ a: 'old-uuid', c: fresh })
+  })
+})
+
+describe('preset mount cross-version alias (code <-> ptc)', () => {
+  it('falls back to the alias when the requested preset is unknown', async () => {
+    const calls: (string | undefined)[] = []
+    const presets: AgentPresetsLike = {
+      async mount(_ctx, id) {
+        calls.push(id)
+        if (id === 'code') throw notFound('code')
+      },
+    }
+    await mountPreset(presets, ctx, 'code')
+    expect(calls).toEqual(['code', 'ptc'])
+  })
+
+  it('does not retry a non-not-found failure', async () => {
+    const calls: (string | undefined)[] = []
+    const presets: AgentPresetsLike = {
+      async mount(_ctx, id) {
+        calls.push(id)
+        throw new Error('preset definition is invalid')
+      },
+    }
+    await expect(mountPreset(presets, ctx, 'code')).rejects.toThrow('preset definition is invalid')
+    expect(calls).toEqual(['code'])
+  })
+
+  it('passes an undefined id straight through', async () => {
+    const calls: (string | undefined)[] = []
+    const presets: AgentPresetsLike = {
+      async mount(_ctx, id) { calls.push(id) },
+    }
+    await mountPreset(presets, ctx, undefined)
+    expect(calls).toEqual([undefined])
   })
 })

@@ -144,6 +144,12 @@ node -e "import('@deepseek-ai/dsh-workflow-engine').then(m => console.log(m.name
 - Materialized `agent.cordis.yml` files are configuration reference snapshots (model route / memory / tool selection are engine-owned) — not standalone runnable presets.
 - Windows: the shipped examples use pure LLM reasoning; flows that use shell tools inherit the platform's bash/pwsh platform branching via the mounted preset.
 
+## Compatibility
+
+- Works with dsh **0.1.x** and **0.2.x**: sandbox seeding reads the `agent` setup argument (0.2.x) and falls back to `agentCtx.agent` (0.1.x); `agent.cancel` uses the platform's `AgentCancelCause` object form.
+- Cross-version preset alias: dsh 0.2.x renamed the built-in `code` preset to `ptc`; `AgentConfig.presetId` may name either and falls back to the other (only on an unknown-preset error, retried once).
+- 0.2.x presets ship `web_search`/`web_fetch` by default (fine for static pages); JS-rendered pages and browser automation still want the `playwright-cli` skill + `sandbox: 'danger-full-access'`.
+
 ## Trust model
 
 Loading `flow.spec.js` / `agents.js` **executes arbitrary code** — treat a flow directory like a bash script (shell-level trust, same stance as the cordis toolset). Spawned agents inherit the deployment default agent preset (which may include shell tools) and are bounded by the session permission presets (`workspace-write` by default).
