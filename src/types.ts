@@ -10,6 +10,10 @@ export interface StateFieldSpec {
   element?: StateFieldSpec
   /** Must be provided via run_workflow `input` (flow cannot start without it). */
   required?: boolean
+  /** Treat this string input as a filesystem path: a relative value is resolved
+   * against the session workspace when the flow loads, so member agents (whose
+   * cwd is their own run-isolated workspace) receive an absolute path. */
+  path?: boolean
 }
 
 /** Declared run-state shape: validation + checkpoint serialization. */
@@ -140,6 +144,9 @@ export interface FlowSpec {
   nodes: Record<string, FlowNode>
 }
 
+/** The three sandbox modes the platform defines (`sandbox/mode` values). */
+export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+
 /** One agent's configuration (single source of truth for runtime + materialization). */
 export interface AgentConfig {
   id: string
@@ -156,7 +163,7 @@ export interface AgentConfig {
    * `danger-full-access` bypasses confinement — browser/playwright skills need
    * it because piped child spawns (stdio:'pipe') fail with EPERM under a
    * restricted token. Opt-in per agent; default is the deployment policy. */
-  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  sandbox?: SandboxMode
   model: { provider: string; model: string }
   memory: 'session' | 'none'
   maxTokens?: number

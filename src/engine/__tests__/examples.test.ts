@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { join } from 'node:path'
 import { loadFlow } from '../loader.ts'
 import { validateFlowSpec, validateAgents } from '../validate.ts'
 import { defaultReaders } from '../readers.ts'
@@ -39,9 +40,10 @@ describe('examples', () => {
     await expect(loadFlow({ flow: './no-such-dir', baseDir: process.cwd() })).rejects.toThrow(/flow not found/)
   })
 
-  it('allows optional sourceDir in analysis-report', async () => {
+  it('resolves the optional sourceDir path in analysis-report', async () => {
     const withDir = await loadFlow({ flow: 'analysis-report', input: { subject: 'x', sourceDir: './materials' } })
-    expect(withDir.input['sourceDir']).toBe('./materials')
+    // sourceDir is declared `path: true`: relative input resolves against the workspace.
+    expect(withDir.input['sourceDir']).toBe(join(process.cwd(), 'materials'))
     const without = await loadFlow({ flow: 'analysis-report', input: { subject: 'x' } })
     expect(without.input['sourceDir']).toBeUndefined()
   })

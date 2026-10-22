@@ -14,9 +14,10 @@ import { access, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type Message } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session } from '@deepseek-ai/dsh-session'
-import type { AgentConfig } from '../types.ts'
+import type { AgentConfig, SandboxMode } from '../types.ts'
 import { attachStructuredOutput, type StructuredAttachment } from './structured.ts'
 import { mountPreset, type AgentPresetsLike } from './preset-mount.ts'
 import { SessionRegistry } from './session-registry.ts'
@@ -28,13 +29,16 @@ interface PromptScope {
   systemPrompt: { section(s: { name: string; order: number; text: string }): unknown }
 }
 
-/** Minimal agent surface used from the setup callback. dsh 0.2.x passes the
- * agent as setup's second argument; older versions exposed it on the context.
- * `session.append` is duck-typed because `sandbox/mode` is contributed by the
- * sandbox-policy seam, not the base SessionEventMap. */
-interface AgentLike {
-  session?: { append(kind: string, data: unknown): void }
-  cancel?(cause: unknown): void
+/** What a member agent inherits from the parent session: the composed preset,
+ * durable lineage, and the parent's explicit sandbox override. Mirrors the
+ * platform's own delegation capture (`dsh-subagent`). */
+export interface ParentScope {
+  /** Preset id the parent agent was composed with (undefined = deployment default). */
+  preset?: string
+  /** Parent session id, recorded as durable lineage on each child session. */
+  sessionId?: SessionId
+  /** The parent session's explicit sandbox override, if it had one. */
+  sandbox?: SandboxMode
 }
 
 export interface SpawnCall {
@@ -53,7 +57,7 @@ export interface SpawnResult {
 }
 
 interface LiveAgent {
-  handle: { agent: import('@deepseek-ai/dsh-agent').Agent; dispose(): Promise<void> }
+  handle: { agent: Agent; dispose(): Promise<void> }
   structured?: StructuredAttachment
 }
 
@@ -66,7 +70,7 @@ export class AgentRunner {
     private readonly flowId: string,
     private readonly runId: string,
     private readonly workspaceRoot: string,
-    private readonly parentPreset?: string,
+    private readonly parent: ParentScope = {},
     seedSessions?: Record<string, string>,
   ) {
     this.sessions = new SessionRegistry(seedSessions)
@@ -178,12 +182,13 @@ export class AgentRunner {
     // Ensure the agent's run-isolated workspace directory exists.
     await mkdir(this.workspaceDir(call.agentId), { recursive: true })
     let attach: StructuredAttachment | undefined
-    const setup = async (agentCtx: Context, agentArg?: AgentLike): Promise<void> => {
+    const presetId = call.config.presetId ?? this.parent.preset
+    const setup = async (agentCtx: Context, agent?: Agent): Promise<void> => {
       const scope = agentCtx as unknown as PromptScope
       // ① preset mount (G3/#16) — required so the spawned agent has tools.
       const presets = this.ctx.get('agentPresets') as AgentPresetsLike | undefined
       if (presets !== undefined) {
-        await mountPreset(presets, agentCtx, call.config.presetId ?? this.parentPreset)
+        await mountPreset(presets, agentCtx, presetId)
       }
       // ② persona + prompt sections.
       scope.systemPrompt.section({ name: 'persona', order: 0, text: call.config.persona })
@@ -210,14 +215,21 @@ export class AgentRunner {
         const skillMod = await import(specifier) as { default?: unknown }
         host.plugin(skillMod.default ?? skillMod, { providerName: `agent-${call.agentId}`, customSkillDirs: [...roots], includeDefaultRoots: false })
       }
-      // ③c optional per-agent sandbox override, seeded like the platform's own
-      // delegation events. Under the restricted token, piped child spawns
+      // ③c per-agent sandbox + approval policy, seeded exactly like the
+      // platform's own delegation events: the parent's explicit sandbox override
+      // is inherited unless the agent config overrides it, and approvals are
+      // pinned to 'never' so a background member never blocks the run on an
+      // interactive prompt. Under the restricted token, piped child spawns
       // (playwright-cli's daemon uses stdio:'pipe') fail with EPERM; opting an
-      // agent into danger-full-access lets such tools run unconfinied.
-      if (call.config.sandbox !== undefined) {
-        const ctxAgent = (agentCtx as unknown as { agent?: AgentLike }).agent
-        const agentSession = (agentArg ?? ctxAgent)?.session
-        agentSession?.append('sandbox/mode', { mode: call.config.sandbox, source: 'delegation' })
+      // agent into danger-full-access lets such tools run unconfined.
+      const target = agent ?? (agentCtx as unknown as { agent?: Agent }).agent
+      const agentSession = target?.session
+      if (agentSession !== undefined) {
+        agentSession.append('approval/policy', { policy: 'never', source: 'delegation' })
+        const mode = call.config.sandbox ?? this.parent.sandbox
+        if (mode !== undefined) {
+          agentSession.append('sandbox/mode', { mode, source: 'delegation' })
+        }
       }
       // ④ structured output (decision nodes only; always fresh-session).
       if (call.structured) {
@@ -230,15 +242,23 @@ export class AgentRunner {
       model: call.config.model.model,
       ...(call.config.maxTokens !== undefined ? { maxTokens: call.config.maxTokens } : {}),
     }
+    // Durable session metadata: preset identity and parent lineage (same fields
+    // the platform's subagent delegation records), so a resumed or inspected
+    // session knows how it was composed.
+    const meta = {
+      cwd: this.workspaceDir(call.agentId),
+      ...(presetId === undefined ? {} : { agentPreset: presetId }),
+      ...(this.parent.sessionId === undefined ? {} : { parentSession: this.parent.sessionId }),
+    }
     const handle = resume
       ? await this.ctx.agents.resume({ resumeSessionId: sid, agentOptions, setup, signal })
-      : await this.ctx.agents.create({ sessionId: sid, meta: { cwd: this.workspaceDir(call.agentId) }, agentOptions, setup, signal })
+      : await this.ctx.agents.create({ sessionId: sid, meta, agentOptions, setup, signal })
     return { handle, structured: attach }
   }
 
-  private async drive(agent: import('@deepseek-ai/dsh-agent').Agent, taskText: string, signal?: AbortSignal, timeoutMs?: number): Promise<{ ok: boolean; error?: string }> {
+  private async drive(agent: Agent, taskText: string, signal?: AbortSignal, timeoutMs?: number): Promise<{ ok: boolean; error?: string }> {
     const fused = fuseSignal(signal, timeoutMs)
-    const onAbort = (): void => { try { (agent as unknown as { cancel(cause: unknown): void }).cancel({ kind: 'hook', reason: 'workflow run aborted' }) } catch { /* noop */ } }
+    const onAbort = (): void => { try { agent.cancel({ kind: 'hook', reason: 'workflow run aborted' }) } catch { /* noop */ } }
     if (fused.signal.aborted) {
       onAbort()
       return { ok: false, error: fused.cause() === 'timeout' ? `agent run timed out after ${timeoutMs ?? '?'}ms` : 'agent run aborted (cancelled)' }

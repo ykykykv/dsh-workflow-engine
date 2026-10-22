@@ -8,8 +8,8 @@
 
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { readFile, readdir } from 'node:fs/promises'
-import type { AgentConfig, FlowSpec } from '../types.ts'
+import { readFile, readdir, stat } from 'node:fs/promises'
+import type { AgentConfig, FlowSpec, StateShape } from '../types.ts'
 import { validateAgents, validateFlowSpec } from './validate.ts'
 import { defaultReaders } from './readers.ts'
 
@@ -92,7 +92,7 @@ export async function loadFlow(opts: LoadOptions): Promise<LoadedFlow> {
   }
   const spec = rawSpec as FlowSpec
 
-  const input = await expandInput(opts.input, baseDir)
+  const input = await expandInput(opts.input, baseDir, spec.state)
 
   const a = validateAgents(agents)
   if (!a.ok) throw new Error(`run_workflow: invalid agents config:\n${a.errors.join('\n')}`)
@@ -106,8 +106,13 @@ export async function loadFlow(opts: LoadOptions): Promise<LoadedFlow> {
  * Expand `@file:<path>` input values: the file's text (txt/markdown) becomes
  * the field's value. Relative paths resolve against baseDir; absolute allowed.
  * Missing/oversized files fail loud.
+ *
+ * Fields the spec marks `path: true` are resolved to absolute paths against
+ * baseDir (the session workspace). Member agents run with their own
+ * run-isolated cwd, so a value like `./README.md` must arrive absolute or the
+ * agent would look for it inside its own empty workspace.
  */
-async function expandInput(input: unknown, baseDir: string): Promise<Record<string, unknown>> {
+async function expandInput(input: unknown, baseDir: string, state: StateShape): Promise<Record<string, unknown>> {
   if (input === undefined || input === null) return {}
   if (typeof input !== 'object' || Array.isArray(input)) return { ...(input as Record<string, unknown>) }
   const out: Record<string, unknown> = {}
@@ -127,6 +132,8 @@ async function expandInput(input: unknown, baseDir: string): Promise<Record<stri
         throw new Error(`run_workflow: input.${key} @file: failed to read "${target}": ${String(error)}`)
       }
       out[key] = text
+    } else if (typeof value === 'string' && value !== '' && state[key]?.path === true && !isAbsolute(value)) {
+      out[key] = resolve(baseDir, value)
     } else {
       out[key] = value
     }
@@ -134,9 +141,18 @@ async function expandInput(input: unknown, baseDir: string): Promise<Record<stri
   return out
 }
 
+/**
+ * Import a flow data module with a content-derived cache key. Node's ESM loader
+ * caches by URL for the life of the process, so a plain absolute path would keep
+ * serving the first version of `flow.spec.js` / `agents.js` after an edit; the
+ * `?v=<mtime>-<size>` suffix changes only when the file does, which also makes
+ * the `resumeStrict` spec-changed gate meaningful within one process.
+ */
 async function importSafe(url: string): Promise<Record<string, unknown> | undefined> {
   try {
-    const mod = await import(pathToFileURL(url).href)
+    const info = await stat(url)
+    const specifier = `${pathToFileURL(url).href}?v=${info.mtimeMs}-${info.size}`
+    const mod = await import(specifier)
     return mod as Record<string, unknown>
   } catch (error) {
     throw new Error(`run_workflow: failed to load ${url}: ${String(error)}`)

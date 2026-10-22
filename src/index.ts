@@ -1,26 +1,38 @@
 /**
- * @deepseek-ai/dsh-workflow-engine ï¿?declarative multi-agent workflow engine.
+ * @deepseek-ai/dsh-workflow-engine â€” declarative multi-agent workflow engine.
  * @module @deepseek-ai/dsh-workflow-engine
  */
 
+import { createRequire } from 'node:module'
 import type { Context } from '@deepseek-ai/cordis'
+import type { Session } from '@deepseek-ai/dsh-session'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
-import type { Checkpoint, EngineConfig, RunWorkflowResult, StopReason } from './types.ts'
+import type { Checkpoint, EngineConfig, RunWorkflowResult, SandboxMode, StopReason } from './types.ts'
 import { loadFlow, listBuiltins } from './engine/loader.ts'
 import { materializeAgents } from './engine/materialize.ts'
 import { collectOutputs } from './engine/collect.ts'
-import { AgentRunner } from './engine/spawn.ts'
+import { AgentRunner, type ParentScope } from './engine/spawn.ts'
 import { createMonitor } from './engine/monitor.ts'
 import { runOrchestrator, type OrchestratorHooks } from './engine/orchestrator.ts'
 import type { Frame } from './types.ts'
 import { hashSpec, parseCheckpoint, resumeAllowed, serializeCheckpoint, atomicWriteFile } from './engine/checkpoint.ts'
 import { assertSafeId } from './engine/validate.ts'
 import { defaultReaders } from './engine/readers.ts'
+import type { AgentPresetsLike } from './engine/preset-mount.ts'
 
 export const name = '@deepseek-ai/dsh-workflow-engine'
 export const inject = ['tools', 'agents']
+
+/** Read from package.json so materialized snapshots and logs carry the real version. */
+const PLUGIN_VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version
+
+/** Minimal `sandboxPolicy` surface (0.2.x): workspace root + explicit session override. */
+interface SandboxPolicyLike {
+  resolve(request?: { session?: Session }): { workspaceRoot: string }
+  overrideOf?(session: Session): SandboxMode | undefined
+}
 
 export interface Config extends EngineConfig {}
 
@@ -31,6 +43,30 @@ function clampTimeout(ms: number | undefined, def: number, max: number): number 
 
 function newRunId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+/** Resolve the workspace root: session cwd first, then the sandbox policy root. */
+function resolveWorkspaceRoot(ctx: Context, exec: ToolRunContext): string {
+  const cwd = exec.agent?.session.header.cwd
+  if (cwd !== undefined && cwd !== '') return cwd
+  const policy = ctx.get('sandboxPolicy') as SandboxPolicyLike | undefined
+  const root = policy?.resolve(exec.agent === undefined ? undefined : { session: exec.agent.session }).workspaceRoot
+  if (root !== undefined && root !== '') return root
+  throw new Error(
+    'run_workflow: the session has no working directory (cwd) and no sandbox workspace root is available; '
+    + 'open the session in a workspace first',
+  )
+}
+
+/** Parent scope inherited by every member agent of this run (preset, lineage, sandbox). */
+function resolveParentScope(ctx: Context, exec: ToolRunContext): ParentScope | undefined {
+  const parent = exec.agent
+  if (parent === undefined) return undefined
+  const presets = ctx.get('agentPresets') as AgentPresetsLike | undefined
+  const preset = presets?.composedPreset?.(parent.ctx)
+    ?? (parent.session.header as unknown as { agentPreset?: string }).agentPreset
+  const sandbox = (ctx.get('sandboxPolicy') as SandboxPolicyLike | undefined)?.overrideOf?.(parent.session)
+  return { preset, sessionId: parent.session.id, sandbox }
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
@@ -44,7 +80,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     name: 'run_workflow',
     description:
       'Run a declarative multi-agent workflow described by a flow spec (flow spec + agents config). ' +
-      'Built-in flows are ALWAYS available by their bare name (e.g. flow: "task-decomposition") ï¿?do NOT search the ' +
+      'Built-in flows are ALWAYS available by their bare name (e.g. flow: "task-decomposition") â€” do NOT search the ' +
       'filesystem for them and do NOT prefix them with ./ or a path; only use an absolute/workspace-relative path for ' +
       'flows YOU authored. flow: "list" returns the available built-in flow names. ' +
       'Supports serial/parallel/conditional/loop orchestration, schema-validated decision agents, checkpoint ' +
@@ -97,7 +133,7 @@ async function runWorkflow(
       const builtins = await listBuiltins()
       return truncate(JSON.stringify({ stopReason: 'completed', runId: null, result: { builtins } }, null, 2), resolved.maxResultChars)
     }
-    const workspaceRoot = exec.agent?.session.header.cwd ?? process.cwd()
+    const workspaceRoot = resolveWorkspaceRoot(ctx, exec)
     const loaded = await loadFlow({ flow: flowRef, defaultName: resolved.defaultExample, input, baseDir: workspaceRoot })
     const flowId = loaded.spec.name
     if (resumeRunId !== undefined) {
@@ -105,11 +141,11 @@ async function runWorkflow(
       if (err !== null) throw new Error(`run_workflow: ${err}`)
     }
     const runId = resumeRunId ?? newRunId()
-    const parentPreset = (exec.agent?.session.header as unknown as { agentPreset?: string }).agentPreset
+    const parent = resolveParentScope(ctx, exec)
     const checkpointPath = join(workspaceRoot, flowId, 'runs', runId, 'checkpoint.json')
 
     // Materialize agents (pure write, regenerate each run).
-    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: '0.0.15' })
+    await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: PLUGIN_VERSION })
 
     const monitor = exec.agent ? createMonitor(exec.agent.session, runId) : null
     const specHash = hashSpec(loaded.spec, loaded.agents)
@@ -119,7 +155,19 @@ async function runWorkflow(
     let restore: { lastNodeId: string | null; stack: Frame[] } | undefined
     let seedSessions: Record<string, string> | undefined
     if (resumeRunId) {
-      const cp = parseCheckpoint(await readFile(checkpointPath, 'utf8'))
+      let checkpointText: string
+      try {
+        checkpointText = await readFile(checkpointPath, 'utf8')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error(
+            `resume: run ${runId} has no checkpoint (it may have paused before its first node completed); `
+            + 're-run without resumeRunId',
+          )
+        }
+        throw error
+      }
+      const cp = parseCheckpoint(checkpointText)
       if (cp.flowId !== flowId) throw new Error(`resume: runId ${runId} belongs to flow "${cp.flowId}", not "${flowId}"`)
       if (!resumeAllowed(cp, specHash, resumeStrict)) {
         throw new Error('resume: the flow spec or agents changed; pass resumeStrict=true to force')
@@ -129,16 +177,8 @@ async function runWorkflow(
       seedSessions = cp.agentSessions
     }
 
-    const runner = new AgentRunner(ctx, flowId, runId, workspaceRoot, parentPreset, seedSessions)
+    const runner = new AgentRunner(ctx, flowId, runId, workspaceRoot, parent, seedSessions)
     let seq = 0
-
-    // Arm the run-level time budget: the wall-clock timer aborts the in-flight
-    // agent so a pause interrupts work instead of waiting for the node to end.
-    runAbort = new AbortController()
-    const runBudget = loaded.spec.defaults?.runTimeoutMs ?? resolved.runTimeoutMs
-    if (runBudget > 0) {
-      runTimer = setTimeout(() => runAbort?.abort(), runBudget)
-    }
 
     const saveCheckpoint = async (snapshot: { lastNodeId: string | null; stack: Frame[]; state: Record<string, unknown> }): Promise<void> => {
       const cp: Checkpoint = {
@@ -150,6 +190,24 @@ async function runWorkflow(
       }
       await mkdir(dirname(checkpointPath), { recursive: true })
       await atomicWriteFile(checkpointPath, serializeCheckpoint(cp))
+    }
+
+    // Initial checkpoint: the orchestrator only checkpoints after a node finishes,
+    // so a pause inside the very first node must still leave a resumable run.
+    if (resumeRunId === undefined) {
+      await saveCheckpoint({
+        lastNodeId: null,
+        stack: [{ type: 'seq', refs: [loaded.spec.entry], index: 0, checkpoint: false }],
+        state: initialState,
+      })
+    }
+
+    // Arm the run-level time budget: the wall-clock timer aborts the in-flight
+    // agent so a pause interrupts work instead of waiting for the node to end.
+    runAbort = new AbortController()
+    const runBudget = loaded.spec.defaults?.runTimeoutMs ?? resolved.runTimeoutMs
+    if (runBudget > 0) {
+      runTimer = setTimeout(() => runAbort?.abort(), runBudget)
     }
 
     const hooks: OrchestratorHooks = {
@@ -221,5 +279,5 @@ function summarize(state: Record<string, unknown>): Record<string, unknown> {
 }
 
 function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}\nï¿?[truncated]` : text
+  return text.length > max ? `${text.slice(0, max)}\nâ€”[truncated]` : text
 }

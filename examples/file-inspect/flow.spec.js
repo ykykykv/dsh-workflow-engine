@@ -4,8 +4,8 @@ export default {
   name: 'file-inspect',
   description: 'Inspect a specific file and/or a directory\'s contents and produce a reviewed Markdown report. Input contract: input.file (optional string, absolute or relative to the session workspace); input.dir (optional string); at least one required.',
   state: {
-    file: { type: 'string' },
-    dir: { type: 'string' },
+    file: { type: 'string', path: true },
+    dir: { type: 'string', path: true },
     notes: { type: 'string' },
     reportPath: { type: 'string' },
     reportText: { type: 'string' },

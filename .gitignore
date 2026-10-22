@@ -2,3 +2,23 @@ node_modules/
 lib/
 *.tgz
 .scratch/
+.dsh-typecheck/
+
+# Materialized reference snapshots + run artifacts produced by running the
+# shipped examples (flowId names the directory under the session workspace).
+/analysis-report/
+/file-inspect/
+/fixer/
+/guess-number/
+/guess-number-shared/
+/roundtable/
+/task-decomposition/
+/web-fetch/
+
+# Run directories of the compatibility probe flows (compat-audit/smoke-*).
+/compat-smoke/
+/compat-decision/
+/compat-cache/
+/compat-firstpause/
+/compat-harness-resume/
+/compat-resume6/

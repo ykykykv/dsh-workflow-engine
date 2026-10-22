@@ -40,6 +40,16 @@ describe('validate', () => {
     const spec: FlowSpec = { ...base, nodes: { main: { kind: 'sequence', nodes: ['ghost'] } } }
     expect(validateFlowSpec(spec, agents, {}, readers).ok).toBe(false)
   })
+  it('rejects path: true on a non-string state field', () => {
+    const spec: FlowSpec = {
+      ...base,
+      state: { n: { type: 'number', path: true } },
+      nodes: { main: { kind: 'set', assign: { n: '1' } } },
+    }
+    const r = validateFlowSpec(spec, agents, {}, readers)
+    expect(r.ok).toBe(false)
+    expect(r.errors.join('; ')).toContain('path is only supported on string fields')
+  })
   it('rejects dangling decision cases', () => {
     const spec: FlowSpec = {
       ...base,

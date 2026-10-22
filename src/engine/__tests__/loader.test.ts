@@ -77,4 +77,55 @@ describe('loader', () => {
     const dir = makeFlow()
     await expect(loadFlow({ flow: dir, input: {} })).rejects.toThrow(/required/)
   })
+
+  it('resolves state fields declared path: true against the session workspace', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'wfe-paths-'))
+    const dir = join(parent, 'flow')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'agents.js'), AGENTS)
+    writeFileSync(join(dir, 'flow.spec.js'), `export default {
+      name: 'tmp-paths',
+      state: {
+        file: { type: 'string', path: true },
+        dir: { type: 'string', path: true },
+        note: { type: 'string' },
+      },
+      entry: 'main',
+      nodes: { main: { kind: 'set', assign: { note: 'ok' } } },
+    }`)
+    writeFileSync(join(parent, 'README.md'), '# hi')
+
+    const loaded = await loadFlow({
+      flow: './flow',
+      baseDir: parent,
+      input: { file: './README.md', dir: 'examples/sub', note: './keep-me' },
+    })
+    expect(loaded.input['file']).toBe(join(parent, 'README.md'))
+    expect(loaded.input['dir']).toBe(join(parent, 'examples', 'sub'))
+    // Fields without `path: true` are passed through untouched.
+    expect(loaded.input['note']).toBe('./keep-me')
+  })
+
+  it('keeps absolute path inputs and still expands @file: on path fields', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'wfe-paths2-'))
+    const dir = join(parent, 'flow')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'agents.js'), AGENTS)
+    writeFileSync(join(dir, 'flow.spec.js'), `export default {
+      name: 'tmp-paths2',
+      state: { file: { type: 'string', path: true }, prompt: { type: 'string', path: true } },
+      entry: 'main',
+      nodes: { main: { kind: 'set', assign: { file: 'x' } } },
+    }`)
+    writeFileSync(join(parent, 'task.md'), 'long prompt')
+    const absolute = join(parent, 'already-absolute.md')
+
+    const loaded = await loadFlow({
+      flow: './flow',
+      baseDir: parent,
+      input: { file: absolute, prompt: '@file:./task.md' },
+    })
+    expect(loaded.input['file']).toBe(absolute)
+    expect(loaded.input['prompt']).toBe('long prompt')
+  })
 })

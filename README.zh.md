@@ -13,11 +13,11 @@ DeepSeek Harness 的声明式多 agent 工作流引擎。用**数据**（flow sp
 ## 安装
 
 ```sh
-dsh plugin --profile web add github:ykykykv/dsh-workflow-engine#v0.0.4
-dsh plugin --profile headless add github:ykykykv/dsh-workflow-engine#v0.0.4
+dsh plugin --profile web add github:ykykykv/dsh-workflow-engine#v0.0.19
+dsh plugin --profile headless add github:ykykykv/dsh-workflow-engine#v0.0.19
 # 本地 tarball：
 npm pack
-dsh plugin --profile web add ./deepseek-ai-dsh-workflow-engine-0.0.4.tgz
+dsh plugin --profile web add ./deepseek-ai-dsh-workflow-engine-0.0.19.tgz
 ```
 
 GitHub 安装会拉取**源码**并靠 `prepare` 构建；pnpm ≥10 默认拦截，第一次 `add` 会失败并打印 `allowBuilds` key——把它加进该 profile 的 `pnpm-workspace.yaml` 后重跑 `add` 即可。
@@ -41,7 +41,7 @@ run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导
 ```
 
 - `flow` 解析顺序：内置名 → 绝对路径 → **相对当前会话工作区**的路径；找不到目录或 `agents.js`/`flow.spec.js` 时报错。**内置 flow 在插件包内**（`…/dsh-workflow-engine/examples/`），不在工作区（工作区只有物化参考快照）。用 `run_workflow flow: 'list'` 列出内置 flow 名。
-- `input`：spec 中标记 `required: true` 的字段必须提供（如 `bigTask`、`subject`）；字符串值以 `@file:<路径>` 开头时，引擎把该 txt/markdown 文件内容读入（相对工作区或绝对，1 MiB 上限）
+- `input`：spec 中标记 `required: true` 的字段必须提供（如 `bigTask`、`subject`）；字符串值以 `@file:<路径>` 开头时，引擎把该 txt/markdown 文件内容读入（相对工作区或绝对，1 MiB 上限）。字符串字段声明 `path: true` 表示它是文件路径：加载时相对路径会按**会话工作区**解析成绝对路径，因为每个成员 agent 的 cwd 是各自隔离的运行工作区（`<工作区>/<flowId>/runs/<runId>/workspace/<agent>`）。
 - `outputDir`：flow 声明的 `outputs` 复制到的目录（绝对或相对工作区；默认 `<工作区>/<flowId>/output`）
 
 返回：`{ stopReason, runId, result?, outputs?, error? }`；`outputs` 为 `[{from, to}]` 报告文件映射；长任务到 `runTimeoutMs` 返回 `paused` + `runId`，再用同一 `flow` + `resumeRunId` 续跑。
@@ -52,7 +52,7 @@ run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导
 
 **单 agent 工具与技能（按文件/文件夹绝对路径加载）**：`AgentConfig.tools` 为**绝对路径**的 ESM 插件模块文件（`.js/.mjs/.ts`，导出 Cordis 插件 `apply(ctx)`，内部 `ctx.tools.register`），加载到该 agent 作用域（仅该 agent 可见）；缺失/非法文件在创建 agent 时 fail-loud。`AgentConfig.skills` 为**直接含 `SKILL.md` 的技能文件夹**（绝对路径）——引擎以其父目录为隔离技能根（`includeDefaultRoots:false`），该 agent 只见这些技能。加载任意代码属 shell 级信任。
 
-`file-inspect` 示例：`run_workflow flow: 'file-inspect' input: { file: './x.md', dir: './docs' }` 读取指定文件与目录内容并产出报告（经 `outputs` 收集）。
+`file-inspect` 示例：`run_workflow flow: 'file-inspect' input: { file: './x.md', dir: './docs' }` 读取指定文件与目录内容并产出报告（经 `outputs` 收集）。`file`/`dir` 均声明为 `path: true`，相对路径会按会话工作区解析成绝对路径后再交给 agent。
 
 **报告/文件输出**：flow 顶部声明 `outputs: ['<路径模板>']`（模板可用 `{state,flowId,runId}`），引擎 run 结束后把文件复制到 `outputDir/<runId>/`（默认 `<工作区>/<flowId>/output/<runId>/`），结果返回 `outputs` 映射。推荐写法：写报告的 agent 把文件写进自己的工作区（写权限天然），flow 把该文件声明为 output，引擎搬运到稳定位置。
 
@@ -67,7 +67,10 @@ run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导
 
 ## 兼容性
 
-- 同时支持 dsh **0.1.x** 与 **0.2.x**：`AgentConfig.sandbox` 的会话种入同时读取 setup 的 `agent` 参数（0.2.x）与 `agentCtx.agent`（0.1.x）；`agent.cancel` 使用平台的 `AgentCancelCause` 对象形式。
+- 已对 dsh **0.2.1-rc.2** 实测（seam 包 `@deepseek-ai/dsh-{agent,llm,session,tools,skill-filesystem}`）；manifest 声明 `engines.dsh: "^0.2.0 || ^0.2.1-rc.2"`，同一范围也写在可选的 seam peer 上，安装时的兼容性门禁会直接拒绝不匹配的运行时。
+- 预发布注意：单独写 `^0.2.0` **不匹配** `0.2.1-rc.2`（semver 默认排除预发布，除非比较器带同一版本元组），所以范围里要加 `^0.2.1-rc.2`。硬 pin 的包可用 `dsh plugin allow-version` 按精确版本豁免。
+- setup 通过第二个参数拿到 agent；`agentCtx.agent` 保留为 0.1.x 兜底。子会话会记录 `agentPreset` 与 `parentSession`，父预设优先用 `agentPresets.composedPreset()` 解析，再回退 `session.header.agentPreset`。
+- 与平台 delegation 对齐：成员会话写入 `sandbox/mode`（来自 `AgentConfig.sandbox`，否则继承父会话的显式覆盖）与 `approval/policy: 'never'`，都带 `source: 'delegation'` —— 后台成员不会卡在交互式审批上。
 - 预设 id 跨版本别名：dsh 0.2.x 把内置预设 `code` 更名为 `ptc`；`AgentConfig.presetId` 写 `code` 或 `ptc` 都会自动回退到对方（仅在"未知预设"错误时回退一次）。
 - 0.2.x 的内置预设默认带 `web_search`/`web_fetch`（静态页可直接抓取）；需要 JS 渲染或浏览器自动化的场景仍建议用 `playwright-cli` 技能 + `sandbox: 'danger-full-access'`。
 
@@ -81,5 +84,7 @@ run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导
 
 ```sh
 npm install            # 用 --legacy-peer-deps；seam 包来自 dsh 安装
-npm run check          # typecheck + vitest + build
+npm run check          # typecheck + typecheck:dsh + vitest + build
 ```
+
+`npm run typecheck:dsh` 用**已安装的 dsh** 的 seam 类型做检查（`$DSH_SEAMS_DIR`，默认 `~/.dsh/profiles/node_modules/@deepseek-ai`），是 dsh 升级后的漂移探测器。

@@ -115,6 +115,12 @@ function validateStateField(key: string, f: StateFieldSpec, errors: string[]): v
     errors.push(`state.${key}: unknown type "${f.type}"`)
     return
   }
+  if (f.path !== undefined && typeof f.path !== 'boolean') {
+    errors.push(`state.${key}: path must be a boolean`)
+  }
+  if (f.path === true && f.type !== 'string') {
+    errors.push(`state.${key}: path is only supported on string fields`)
+  }
   if (f.type === 'array') {
     if (f.element === undefined || typeof f.element !== 'object') {
       errors.push(`state.${key}: array requires an element spec`)

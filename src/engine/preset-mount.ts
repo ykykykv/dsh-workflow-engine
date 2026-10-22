@@ -8,9 +8,11 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 
-/** Minimal `agentPresets` service surface (mount by id, undefined = default). */
+/** Minimal `agentPresets` service surface: mount by id (undefined = default) and
+ * read the preset a live parent agent was composed with (0.2.x; absent on 0.1.x). */
 export interface AgentPresetsLike {
   mount(ctx: Context, id?: string): Promise<unknown>
+  composedPreset?(ctx: Context): string | undefined
 }
 
 const PRESET_ALIASES: Record<string, string> = { code: 'ptc', ptc: 'code' }

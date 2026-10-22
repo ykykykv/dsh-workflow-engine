@@ -15,8 +15,8 @@ Declarative multi-agent workflow engine for DeepSeek Harness. Describe workflows
 From GitHub (web and headless are separate profiles):
 
 ```sh
-dsh plugin --profile web add github:ykykykv/dsh-workflow-engine#v0.0.4
-dsh plugin --profile headless add github:ykykykv/dsh-workflow-engine#v0.0.4
+dsh plugin --profile web add github:ykykykv/dsh-workflow-engine#v0.0.18
+dsh plugin --profile headless add github:ykykykv/dsh-workflow-engine#v0.0.18
 ```
 
 Git installs fetch **sources**, and the `prepare` script builds them on install. pnpm ≥10 blocks a git dependency's `prepare` script until it is explicitly allowed: the first `add` fails and prints the exact `allowBuilds` key — copy it into the profile's `pnpm-workspace.yaml`, then re-run `add`:
@@ -30,7 +30,7 @@ From a local tarball (no build allowance needed):
 
 ```sh
 npm pack
-dsh plugin --profile web add ./deepseek-ai-dsh-workflow-engine-0.0.4.tgz
+dsh plugin --profile web add ./deepseek-ai-dsh-workflow-engine-0.0.18.tgz
 ```
 
 Verify the row is composed:
@@ -39,7 +39,7 @@ Verify the row is composed:
 dsh --profile web --dump-config | grep tool-workflow-engine
 ```
 
-Runtime seam packages (`@deepseek-ai/dsh-tools`, `@deepseek-ai/dsh-agent`, `@deepseek-ai/dsh-session`, `@deepseek-ai/dsh-llm`) are provided by the dsh installation's healed `profiles/node_modules`, so no separate peer install is needed.
+Runtime seam packages (`@deepseek-ai/dsh-tools`, `@deepseek-ai/dsh-agent`, `@deepseek-ai/dsh-session`, `@deepseek-ai/dsh-llm`, `@deepseek-ai/dsh-skill-filesystem`) are provided by the dsh installation's healed `profiles/node_modules`, so no separate install is needed: they are declared as **optional** peer dependencies (the declared ranges are still what dsh's install-time compatibility gate checks).
 
 ## Usage
 
@@ -99,10 +99,10 @@ Per-agent tools & skills (loaded from absolute file/folder paths):
 - `skills?: string[]` — absolute paths to **skill folders that directly contain `SKILL.md`** (or directories containing multiple skill subfolders). The engine scans their parent as an isolated skill root (`includeDefaultRoots: false`), so only the listed skills are visible to that agent.
 - `sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'` — optional **per-agent** sandbox override seeded onto the agent session at materialization (mirrors the platform's `source: 'delegation'` events). Default (unset) follows the deployment/session policy. `danger-full-access` **bypasses confinement** so the agent's shell tools run unrestricated — required for tools that must spawn piped child processes (e.g. `playwright-cli`'s daemon uses `stdio: 'pipe'`, which fails with `EPERM` under a restricted token). Opt in explicitly per agent; treat it as shell-level trust.
 
-`file-inspect` example: `run_workflow flow: 'file-inspect' input: { file: './x.md', dir: './docs' }` reads a specific file and a directory's contents, then produces a report collected via `outputs`.
+`file-inspect` example: `run_workflow flow: 'file-inspect' input: { file: './x.md', dir: './docs' }` reads a specific file and a directory's contents, then produces a report collected via `outputs`. `file`/`dir` are declared `path: true`, so relative values are resolved against the session workspace before the run starts (member agents run in their own isolated cwd).
 
 - Templates: `{state.a.b}`, `{item.x}`, `{loopIndex}`, bare vars (`{t}` for map `as`, bare paths like `{splitResult.tasks}` resolve against `state`), readers (`{filterBy(history, owner, 'g0')}`), `{path ?? fallback}`, and the run facts `{flowId}` / `{runId}`. Lookup only — logic goes in predicates.
-- Input: state fields declared `required: true` must be supplied via `input` for the flow to start (e.g. `bigTask`, `taskText`, `subject`); fields without it may be filled by the flow itself. Long prompts can be imported from a file: `input: { subject: '@file:./docs/需求.md' }`.
+- Input: state fields declared `required: true` must be supplied via `input` for the flow to start (e.g. `bigTask`, `taskText`, `subject`); fields without it may be filled by the flow itself. Long prompts can be imported from a file: `input: { subject: '@file:./docs/需求.md' }`. Declare a string field `path: true` when the value is a filesystem path and the producing agent should receive it **absolute**: relative input is resolved against the session workspace at load time, because each member agent's cwd is its own run-isolated workspace (`<workspace>/<flowId>/runs/<runId>/workspace/<agent>`).
 - Predicates (`branch.if`, `loop.until`): `a==1`, `!splitReview.ok`, `judge.verdict=="reanalyze"`, `&&`/`||`, reader calls. `set` coerces literal `true`/`false`/numbers to typed values, so `set allPass = 'true'` is truthy against `allPass==true`.
 - Every `loop` requires `maxIter` (default guidance 3); `break` exits the nearest loop (and is validated to be inside a loop); `fail` stops the run with `stopReason: 'failed'` (e.g. a loop cap reached without success).
 - Spec-level `defaults: { timeoutMs, runTimeoutMs }` override the plugin's configured timeouts; a spec `timeoutMs` is clamped to `[defaultTimeoutMs, maxTimeoutMs]` (config), so it can raise a node's budget but not lower it below the configured floor.
@@ -126,13 +126,17 @@ Run directories created under the session workspace:
 ## Consumer verification (release gate)
 
 ```sh
-npm run check        # typecheck + unit tests + build
+npm run check        # typecheck + typecheck:dsh + unit tests + build
 npm pack
-dsh plugin --profile compat add -w ./deepseek-ai-dsh-workflow-engine-0.0.4.tgz
+dsh plugin --profile compat add -w ./deepseek-ai-dsh-workflow-engine-0.0.18.tgz
 dsh --profile compat --dump-config | grep tool-workflow-engine
 # module loads in the profile context:
 node -e "import('@deepseek-ai/dsh-workflow-engine').then(m => console.log(m.name, m.inject))"
 ```
+
+`npm run typecheck:dsh` type-checks the sources against the seam packages of the **deployed** dsh
+installation (`$DSH_SEAMS_DIR`, default `~/.dsh/profiles/node_modules/@deepseek-ai`), which is the
+drift detector for dsh upgrades — run it after bumping the dsh version.
 
 ## Known limitations
 
@@ -146,7 +150,10 @@ node -e "import('@deepseek-ai/dsh-workflow-engine').then(m => console.log(m.name
 
 ## Compatibility
 
-- Works with dsh **0.1.x** and **0.2.x**: sandbox seeding reads the `agent` setup argument (0.2.x) and falls back to `agentCtx.agent` (0.1.x); `agent.cancel` uses the platform's `AgentCancelCause` object form.
+- Verified against dsh **0.2.1-rc.2** (seam packages `@deepseek-ai/dsh-{agent,llm,session,tools,skill-filesystem}`); the manifest declares `engines.dsh: "^0.2.0 || ^0.2.1-rc.2"` and the same range on its optional seam peers, so dsh's install-time compatibility gate rejects a mismatched runtime instead of failing later.
+- Prerelease note: `^0.2.0` alone does **not** match `0.2.1-rc.2` (semver excludes prereleases unless the comparator carries the same version tuple), hence the `^0.2.1-rc.2` alternative. A hard-pinned install can be waived per exact version with `dsh plugin allow-version`.
+- Setup receives the agent as its second argument; `agentCtx.agent` remains a 0.1.x fallback. The child session records `agentPreset` and `parentSession` from the parent, and the parent's composed preset is resolved via `agentPresets.composedPreset()` before falling back to `session.header.agentPreset`.
+- Delegation parity: member sessions get `sandbox/mode` (from `AgentConfig.sandbox`, else the parent's explicit override) and `approval/policy: 'never'`, both with `source: 'delegation'` — a background member never blocks on an interactive approval prompt.
 - Cross-version preset alias: dsh 0.2.x renamed the built-in `code` preset to `ptc`; `AgentConfig.presetId` may name either and falls back to the other (only on an unknown-preset error, retried once).
 - 0.2.x presets ship `web_search`/`web_fetch` by default (fine for static pages); JS-rendered pages and browser automation still want the `playwright-cli` skill + `sandbox: 'danger-full-access'`.
 

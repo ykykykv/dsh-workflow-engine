@@ -6,7 +6,7 @@ export default {
   description: 'Analyze a subject (optionally reading a source directory) and produce a reviewed Markdown report file. Input contract: input.subject (required string); input.sourceDir (optional string path, absolute or relative to the session workspace).',
   state: {
     subject: { type: 'string', required: true },
-    sourceDir: { type: 'string' },
+    sourceDir: { type: 'string', path: true },
     analysis: { type: 'string' },
     reportPath: { type: 'string' },
     reportText: { type: 'string' },
