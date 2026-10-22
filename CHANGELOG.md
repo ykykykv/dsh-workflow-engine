@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.0.20 — 2026-10-22 (unreleased)
+
+### Added
+
+- **Background runs** (`background: true`): the run is registered as an owned `ctx.jobs`
+  job and the tool returns `{ stopReason: 'started', jobId, runId }` immediately, so a long
+  flow no longer holds the parent turn. Phase changes feed the job progress line and
+  `tool-workflow/*` narration lands in the job output ring; the settled job carries the same
+  JSON as a foreground call. A background run requires a positive run budget
+  (`flow defaults.runTimeoutMs` or plugin `runTimeoutMs`) and is rejected otherwise.
+  Job outcomes are `completed | killed | failed`; `paused` settles as `failed` with a
+  `paused: … (runId=…)` detail (the job vocabulary has no `paused`).
+- **Bounded auto-resume** (`autoResume`, 0–3, background only): a paused background run
+  resumes itself up to N times, each resume spending one fresh budget window, so total work
+  stays bounded by `budget × (N + 1)`. Default 0.
+- **Run-level lease** (`runs/<runId>/lease.json`, 5s heartbeat, 30s TTL): one writer per run.
+  A concurrent manual resume while a background job owns the run is rejected with the current
+  owner and expiry; a lease left by a crashed process needs `takeover: true`. This closes the
+  last-writer-wins window between a manual resume and a background job.
+
+### Changed
+
+- `paused` and `cancelled` results now carry a `message` with the exact resume/kill guidance
+  plus a `checkpointPath`, instead of only the state.
+
+### Tests
+
+- Lease acquisition/conflict/expiry/takeover/release, job-outcome mapping, and the bounded
+  auto-resume loop are unit-tested; the compatibility harness gained two probes (background
+  job + auto-resume, concurrent-writer rejection) and now runs 10 probes against a real dsh
+  profile.
+
 ## 0.0.19 — 2026-10-22 (unreleased)
 
 ### Added

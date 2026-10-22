@@ -75,14 +75,26 @@ Parameters:
 | `resumeRunId` | string | Resume a paused/interrupted run by id. |
 | `resumeStrict` | boolean | Resume even when the spec changed (default `false`). |
 | `outputDir` | string | Directory the flow's declared `outputs` are copied to (absolute, or relative to the session workspace). Default: `<workspace>/<flowId>/output`. |
+| `background` | boolean | Register the run as an owned `ctx.jobs` job and return `{ stopReason: 'started', jobId, runId }` immediately instead of holding the turn. Requires a positive run budget (`flow` `defaults.runTimeoutMs` or the plugin `runTimeoutMs`). |
+| `autoResume` | integer | Background only: automatically resume a paused run up to this many times (`0`–`3`, default `0`). Each resume spends a fresh budget window, so it also bounds token spend. |
+| `takeover` | boolean | Take over an expired run lease left by a crashed process (default `false`). Fails while the lease is live. |
 
-Result shape:
+Result shape (foreground):
 
 ```json
-{ "stopReason": "completed|paused|cancelled|failed|error", "runId": "...", "result": {…}, "outputs": [ { "from": "…", "to": "…" } ], "error": { "node": "…", "message": "…", "checkpointPath": "…" } }
+{ "stopReason": "completed|paused|cancelled|failed|error", "runId": "...", "result": {…}, "outputs": [ { "from": "…", "to": "…" } ], "error": { "node": "…", "message": "…", "checkpointPath": "…" }, "message": "…", "checkpointPath": "…" }
 ```
 
-Long runs return `paused` with a `runId` when `runTimeoutMs` elapses; call again with the same `flow` and `resumeRunId` to continue.
+`paused` / `cancelled` carry a `message` with the exact next call and the `checkpointPath`; long runs return `paused` with a `runId` when `runTimeoutMs` elapses, so calling again with the same `flow` and `resumeRunId` continues from the checkpoint.
+
+### Background runs
+
+`background: true` hands the run to the job registry (`ctx.jobs`, provided by `dsh-jobs-local` + `dsh-tool-jobs`): the call returns `{ "stopReason": "started", "jobId": "workflow-engine-…", "runId": "…", "message": "…" }` and the run keeps going after the turn ends. Check it with `job_output`, stop it with `job_kill`; a completed run carries the same JSON as a foreground call (`stopReason`, `result`, `outputs`) in the job result. Phase changes become the job's progress line and the `tool-workflow/*` log lines land in the job output ring.
+
+- **Budget is mandatory**: a background run without a positive `runTimeoutMs` is rejected — an unbounded run nobody watches would burn tokens.
+- **`paused` settles the job as `failed`** with a `paused: … (runId=…)` detail, because the job vocabulary has no `paused`. Pass `autoResume: N` (≤ 3) to let the job resume itself up to N times before settling.
+- **One writer per run**: each run holds `runs/<runId>/lease.json` (5s heartbeat, 30s TTL). A concurrent manual resume is rejected while a background job owns the run, and a lease left by a crashed process needs `takeover: true`.
+- Foreground calls are unchanged: without `background`, the turn still waits for the run.
 
 ## Authoring a flow
 
@@ -141,7 +153,8 @@ drift detector for dsh upgrades — run it after bumping the dsh version.
 ## Known limitations
 
 - Member-session navigation in the built-in workflow-run UI is limited: spawned agents are top-level sessions, not `subagent` origin, so the run/phase/member **status tree** renders but per-member "open child session" may not navigate.
-- A long `run_workflow` holds the parent turn; segmented by `runTimeoutMs` pause/resume. A background-job mode is future work.
+- A foreground `run_workflow` holds the parent turn (segmented by `runTimeoutMs` pause/resume); use `background: true` to move it to a job. Background job lifetime is the process lifetime — a restart keeps the checkpoint, and `resumeRunId` continues manually.
+- `autoResume` is bounded to 3 and needs a positive budget; there is no unbounded self-driving loop.
 - A crashed `parallel` re-runs as a whole on resume (session-mode agents gain extra turns).
 - A changed spec blocks resume unless `resumeStrict=true` (reproducibility gate).
 - Resume restores the workflow state/stack **and** session-mode agents' conversation memory (their persisted sessions are resumed; a missing session falls back to a fresh create).

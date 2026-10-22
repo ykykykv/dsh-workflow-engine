@@ -208,6 +208,18 @@ export interface RunWorkflowResult {
   result?: unknown
   outputs?: { from: string; to: string }[]
   error?: { node: string; message: string; checkpointPath: string }
+  /** Actionable next step, set for `paused` (how to resume) and `cancelled`. */
+  message?: string
+  /** Checkpoint backing a paused run, so a caller can inspect or resume it. */
+  checkpointPath?: string
+}
+
+/** Immediate result of a `background: true` call. */
+export interface RunWorkflowStarted {
+  stopReason: 'started'
+  runId: string
+  jobId: string
+  message: string
 }
 
 /** Environment for template/predicate evaluation. */

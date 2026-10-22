@@ -43,8 +43,19 @@ run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导
 - `flow` 解析顺序：内置名 → 绝对路径 → **相对当前会话工作区**的路径；找不到目录或 `agents.js`/`flow.spec.js` 时报错。**内置 flow 在插件包内**（`…/dsh-workflow-engine/examples/`），不在工作区（工作区只有物化参考快照）。用 `run_workflow flow: 'list'` 列出内置 flow 名。
 - `input`：spec 中标记 `required: true` 的字段必须提供（如 `bigTask`、`subject`）；字符串值以 `@file:<路径>` 开头时，引擎把该 txt/markdown 文件内容读入（相对工作区或绝对，1 MiB 上限）。字符串字段声明 `path: true` 表示它是文件路径：加载时相对路径会按**会话工作区**解析成绝对路径，因为每个成员 agent 的 cwd 是各自隔离的运行工作区（`<工作区>/<flowId>/runs/<runId>/workspace/<agent>`）。
 - `outputDir`：flow 声明的 `outputs` 复制到的目录（绝对或相对工作区；默认 `<工作区>/<flowId>/output`）
+- `background`：true 时把这次 run 注册成 `ctx.jobs` 的后台 job，立即返回 `{ stopReason:'started', jobId, runId }`，不再占住父回合；必须有正的运行预算（flow 的 `defaults.runTimeoutMs` 或插件 `runTimeoutMs`）
+- `autoResume`：仅后台有效，`paused` 时自动续跑的次数（`0`–`3`，默认 `0`）；每次续跑都花一个新预算窗口，因此也是 token 上限
+- `takeover`：接管崩溃进程留下的过期租约（默认 false；租约还活着时会被拒绝）
 
-返回：`{ stopReason, runId, result?, outputs?, error? }`；`outputs` 为 `[{from, to}]` 报告文件映射；长任务到 `runTimeoutMs` 返回 `paused` + `runId`，再用同一 `flow` + `resumeRunId` 续跑。
+返回：`{ stopReason, runId, result?, outputs?, error?, message?, checkpointPath? }`；`outputs` 为 `[{from, to}]` 报告文件映射；长任务到 `runTimeoutMs` 返回 `paused` + `runId`，`message` 给出续跑命令，再用同一 `flow` + `resumeRunId` 续跑。
+
+### 后台运行
+
+`background: true` 后：调用立即返回 jobId，run 在回合结束后继续跑；用 `job_output` 看进度/结果、`job_kill` 停止。phase 变化写进 job 进度行，`tool-workflow/*` 日志进 job 输出环。job 完成后结果与前台调用同一份 JSON。
+
+- **必须给预算**：没有正 `runTimeoutMs` 的后台 run 会被拒绝（无人看管的无界运行会烧 token）。
+- **`paused` 结算为 job 的 `failed`**，detail 形如 `paused: … (runId=…)`——job 词汇里没有 paused。需要自动接续就传 `autoResume`（≤3）。
+- **一个 run 只有一个写者**：每次运行持有 `runs/<runId>/lease.json`（5s 心跳 / 30s TTL）。后台 job 持有期间手动 `resumeRunId` 会被明确拒绝；崩溃留下的过期租约需要 `takeover: true`。
 
 ## 编写 flow
 
@@ -59,7 +70,8 @@ run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导
 ## 已知局限
 
 - 内置 workflow-run UI 的成员"点开子会话"导航受限（我们的 agent 是顶层会话，非 subagent origin），但 run/阶段/成员状态树正常显示。
-- 长任务占用父轮次（靠 `runTimeoutMs` 分段；后台 job 模式为后续项）。
+- 前台 `run_workflow` 占用父轮次（靠 `runTimeoutMs` 分段）；需要不占用就用 `background: true`。后台 job 的生命周期等于进程生命周期——进程重启后 checkpoint 还在，可用 `resumeRunId` 手动接续。
+- `autoResume` 上限 3 且必须有正预算；不存在无界的自动续跑。
 - 崩溃的 `parallel` 恢复时会整体重跑。
 - spec 变更阻断续跑（除非 `resumeStrict=true`）。
 - 物化的 `agent.cordis.yml` 是配置参考快照（模型路由/记忆/工具选择属引擎），非可独立运行的完整预设。
