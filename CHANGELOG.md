@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.0.21 — 2026-11-17 (unreleased)
+
+### Added
+
+- **`code` node**: a first-class deterministic step beside `agent`/`decision`. The body gets
+  `{ state, item, loopIndex, get, render, now, log, fail, signal }` (no `ctx`, no agent access),
+  returns `{ patch?, value?, signal?: 'break' }`, and is engine-checkpointed like any other node.
+  `fail()` ends the run as `failed`; a throw honors `onError` (`retry`/`continue`/`goto`/`abort`).
+  Module bodies (`{ module: './code/x.mjs' }`) are preferred over inline bodies; `timeoutMs`
+  (default 5s) is cooperative. Bodies must be pure — a resume replays them.
+- **Flow bundle**: `personaRef` resolves `personas/<name>.md` (`.md`/`.markdown`/`.txt`), and every
+  referenced code module is hashed by content. The bundle hash is folded into `specHash`, so editing
+  a persona or code module blocks a stale resume instead of mixing old and new behavior.
+- `src/engine/import-fresh.ts`: one cache-busting import helper, now also used by per-agent tool
+  modules (`tools: [...]`), so an edited tool module takes effect without a restart.
+
+### Changed
+
+- `AgentConfig.persona` is optional: exactly one of `persona` / `personaRef` is required.
+- `hashSpec(spec, agents, bundle?)` hashes the flow bundle; checkpoints from before this version
+  still resume when the spec and agents are unchanged and the bundle is empty.
+
 ## 0.0.20 — 2026-10-22 (unreleased)
 
 ### Added

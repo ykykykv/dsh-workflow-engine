@@ -40,6 +40,34 @@ describe('validate', () => {
     const spec: FlowSpec = { ...base, nodes: { main: { kind: 'sequence', nodes: ['ghost'] } } }
     expect(validateFlowSpec(spec, agents, {}, readers).ok).toBe(false)
   })
+  it('validates code node shape', () => {
+    const bad = (node: FlowSpec['nodes'][string]): string => {
+      const r = validateFlowSpec({ ...base, nodes: { main: node } }, agents, {}, readers)
+      return r.errors.join('; ')
+    }
+    expect(bad({ kind: 'code', run: '  ' })).toContain('code.run must be a non-empty body')
+    expect(bad({ kind: 'code', run: { module: '' } })).toContain('code.run must be a non-empty body')
+    expect(bad({ kind: 'code', run: 'return 1', store: '' })).toContain('code.store must be a non-empty state key')
+    expect(bad({ kind: 'code', run: 'return 1', timeoutMs: 0 })).toContain('code.timeoutMs must be a positive number')
+    expect(bad({ kind: 'code', run: 'return 1' })).toBe('')
+  })
+  it('requires exactly one of persona / personaRef', () => {
+    const both = {
+      ...agents,
+      c: { id: 'c', persona: 'p', personaRef: 'r', model: { provider: 'p', model: 'm' }, memory: 'none' as const },
+    }
+    expect(validateAgents(both).errors.join('; ')).toContain('mutually exclusive')
+    const neither = {
+      ...agents,
+      d: { id: 'd', model: { provider: 'p', model: 'm' }, memory: 'none' as const },
+    }
+    expect(validateAgents(neither).errors.join('; ')).toContain('persona or personaRef is required')
+    const unsafe = {
+      ...agents,
+      e: { id: 'e', personaRef: '../x', model: { provider: 'p', model: 'm' }, memory: 'none' as const },
+    }
+    expect(validateAgents(unsafe).errors.join('; ')).toContain('personaRef must match')
+  })
   it('rejects path: true on a non-string state field', () => {
     const spec: FlowSpec = {
       ...base,

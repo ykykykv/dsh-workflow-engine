@@ -6,15 +6,20 @@
  * @module @deepseek-ai/dsh-workflow-engine/loader
  */
 
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { readFile, readdir, stat } from 'node:fs/promises'
-import type { AgentConfig, FlowSpec, StateShape } from '../types.ts'
-import { validateAgents, validateFlowSpec } from './validate.ts'
+import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { readFile, readdir } from 'node:fs/promises'
+import type { AgentConfig, BundleFile, FlowNode, FlowSpec, StateShape } from '../types.ts'
+import { childRefs, validateAgents, validateFlowSpec } from './validate.ts'
 import { defaultReaders } from './readers.ts'
+import { importFresh } from './import-fresh.ts'
 
 /** Cap for `@file:` input expansion. */
 const MAX_FILE_INPUT_BYTES = 1024 * 1024
+
+/** Persona file extensions tried for `personaRef`. */
+const PERSONA_EXTENSIONS = ['.md', '.markdown', '.txt']
 
 /** Absolute path to the package's shipped `examples/` directory. */
 function examplesDir(): string {
@@ -43,6 +48,8 @@ export interface LoadedFlow {
   dir: string
   name: string
   input: Record<string, unknown>
+  /** External files this flow references (code modules, persona files), by content. */
+  bundle: BundleFile[]
 }
 
 export interface LoadOptions {
@@ -99,7 +106,76 @@ export async function loadFlow(opts: LoadOptions): Promise<LoadedFlow> {
   const v = validateFlowSpec(spec, agents, input, defaultReaders())
   if (!v.ok) throw new Error(`run_workflow: invalid flow spec "${spec.name}":\n${v.errors.join('\n')}`)
 
-  return { spec, agents, dir, name: spec.name, input }
+  // Resolve the flow bundle: persona files become inline text, code modules are
+  // recorded by content so a changed module moves the spec hash (and blocks a
+  // resume that would otherwise mix old and new code).
+  const bundle: BundleFile[] = []
+  const resolvedAgents = await resolvePersonas(agents, dir, bundle)
+  await collectCodeModules(spec, dir, bundle)
+  bundle.sort((x, y) => (x.file < y.file ? -1 : x.file > y.file ? 1 : 0))
+
+  return { spec, agents: resolvedAgents, dir, name: spec.name, input, bundle }
+}
+
+/** Hash one file's bytes and describe it relative to the flow directory. */
+async function bundleEntry(flowDir: string, file: string): Promise<BundleFile> {
+  const bytes = await readFile(file)
+  const rel = relative(flowDir, file)
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error(`run_workflow: referenced file "${file}" is outside the flow directory "${flowDir}"`)
+  }
+  return { file: rel.split(sep).join('/'), sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.byteLength }
+}
+
+/** Resolve `personaRef` fields to their file text, recording each file. */
+async function resolvePersonas(
+  agents: Record<string, AgentConfig>,
+  flowDir: string,
+  bundle: BundleFile[],
+): Promise<Record<string, AgentConfig>> {
+  const out: Record<string, AgentConfig> = {}
+  for (const [id, agent] of Object.entries(agents)) {
+    if (agent.personaRef === undefined) {
+      out[id] = agent
+      continue
+    }
+    const candidates = PERSONA_EXTENSIONS.map(ext => join(flowDir, 'personas', `${agent.personaRef}${ext}`))
+    let found: string | undefined
+    for (const candidate of candidates) {
+      if (await exists(candidate)) { found = candidate; break }
+    }
+    if (found === undefined) {
+      throw new Error(
+        `run_workflow: agent "${id}" personaRef "${agent.personaRef}" not found; tried `
+        + candidates.map(c => `"${relative(flowDir, c).split(sep).join('/')}"`).join(', '),
+      )
+    }
+    const text = await readFile(found, 'utf8')
+    bundle.push(await bundleEntry(flowDir, found))
+    out[id] = { ...agent, persona: text }
+  }
+  return out
+}
+
+/** Walk every code node (named or inline) and record its module file. */
+async function collectCodeModules(spec: FlowSpec, flowDir: string, bundle: BundleFile[]): Promise<void> {
+  const seen = new Set<FlowNode | string>()
+  const walk = async (ref: string | FlowNode): Promise<void> => {
+    if (seen.has(ref)) return
+    seen.add(ref)
+    const node = typeof ref === 'string' ? spec.nodes[ref] : ref
+    if (node === undefined) return
+    if (node.kind === 'code' && typeof node.run !== 'string') {
+      const modulePath = node.run.module
+      const absolute = resolve(flowDir, modulePath)
+      if (!(await exists(absolute))) {
+        throw new Error(`run_workflow: code node module "${modulePath}" not found at "${absolute}"`)
+      }
+      bundle.push(await bundleEntry(flowDir, absolute))
+    }
+    for (const child of childRefs(node)) await walk(child)
+  }
+  await walk(spec.entry)
 }
 
 /**
@@ -141,19 +217,10 @@ async function expandInput(input: unknown, baseDir: string, state: StateShape): 
   return out
 }
 
-/**
- * Import a flow data module with a content-derived cache key. Node's ESM loader
- * caches by URL for the life of the process, so a plain absolute path would keep
- * serving the first version of `flow.spec.js` / `agents.js` after an edit; the
- * `?v=<mtime>-<size>` suffix changes only when the file does, which also makes
- * the `resumeStrict` spec-changed gate meaningful within one process.
- */
+/** Import one flow data module, busting the ESM cache when its content changed. */
 async function importSafe(url: string): Promise<Record<string, unknown> | undefined> {
   try {
-    const info = await stat(url)
-    const specifier = `${pathToFileURL(url).href}?v=${info.mtimeMs}-${info.size}`
-    const mod = await import(specifier)
-    return mod as Record<string, unknown>
+    return await importFresh<Record<string, unknown>>(url)
   } catch (error) {
     throw new Error(`run_workflow: failed to load ${url}: ${String(error)}`)
   }

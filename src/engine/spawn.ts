@@ -12,12 +12,12 @@
 import { randomUUID } from 'node:crypto'
 import { access, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type Message } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session } from '@deepseek-ai/dsh-session'
 import type { AgentConfig, SandboxMode } from '../types.ts'
+import { importFresh } from './import-fresh.ts'
 import { attachStructuredOutput, type StructuredAttachment } from './structured.ts'
 import { mountPreset, type AgentPresetsLike } from './preset-mount.ts'
 import { SessionRegistry } from './session-registry.ts'
@@ -191,15 +191,15 @@ export class AgentRunner {
         await mountPreset(presets, agentCtx, presetId)
       }
       // ② persona + prompt sections.
-      scope.systemPrompt.section({ name: 'persona', order: 0, text: call.config.persona })
+      scope.systemPrompt.section({ name: 'persona', order: 0, text: call.config.persona ?? '' })
       for (const s of call.config.promptSections ?? []) {
         scope.systemPrompt.section({ name: s.name, order: s.order, text: s.text })
       }
       // ③ load per-agent tool plugin modules (absolute paths to ESM plugin files).
+      // importFresh lets an edited tool module take effect without a restart.
       const host = agentCtx as unknown as { plugin(plugin: unknown, config?: unknown): unknown }
       for (const entry of call.config.tools ?? []) {
-        const specifier = pathToFileURL(entry).href
-        const mod = await import(specifier) as { default?: unknown }
+        const mod = await importFresh<{ default?: unknown }>(entry)
         host.plugin(mod.default ?? mod)
       }
       // ③b register per-agent skills (absolute skill-folder paths; each entry

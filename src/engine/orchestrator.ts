@@ -5,7 +5,7 @@
  * @module @deepseek-ai/dsh-workflow-engine/orchestrator
  */
 
-import type { AgentConfig, AgentNode, DecisionNode, FlowNode, FlowSpec, Frame } from '../types.ts'
+import type { AgentConfig, AgentNode, CodeNode, DecisionNode, EvalEnv, FlowNode, FlowSpec, Frame, OnErrorPolicy } from '../types.ts'
 import { resolveNode } from './validate.ts'
 import { getPath } from './path.ts'
 import { renderTemplate, type ReaderRegistry } from './template.ts'
@@ -18,8 +18,25 @@ export interface AgentRunOutcome {
   error?: string
 }
 
+/** Result of one `code` node execution. */
+export interface CodeRunOutcome {
+  ok: boolean
+  patch?: Record<string, unknown>
+  value?: unknown
+  /** Exit the nearest loop. */
+  signal?: 'break'
+  /** Deliberate run failure (api.fail): stop the run, bypass onError. */
+  fatal?: boolean
+  error?: string
+}
+
+/** Environment a code node sees (state + map/loop position). */
+export type CodeEnv = EvalEnv
+
 export interface OrchestratorHooks {
   runAgent(node: AgentNode | DecisionNode, taskText: string): Promise<AgentRunOutcome>
+  /** Deterministic step. Omitted runtimes reject `code` nodes instead of skipping them. */
+  runCode?(node: CodeNode, env: EvalEnv): Promise<CodeRunOutcome>
   emit(event: string, payload: Record<string, unknown> | undefined): void
   checkpoint(snapshot: { lastNodeId: string | null; stack: Frame[]; state: Record<string, unknown> }): void | Promise<void>
   onPhase(title: string): void
@@ -133,11 +150,16 @@ export async function runOrchestrator(
     return last
   }
 
-  /** Apply node/spec onError after an agent/decision call failed. */
-  const handleAgentFailure = (node: AgentNode | DecisionNode, nodeId: string, outcome: AgentRunOutcome): StepSignal => {
+  /** Apply node/spec onError after an agent, decision, or code call failed. */
+  const handleFailure = (
+    node: { store?: string; onError?: OnErrorPolicy },
+    nodeId: string,
+    outcome: { store?: string; error?: string },
+    what: string,
+  ): StepSignal => {
     const p = node.onError ?? ctx.spec.onError
     if (p !== undefined && p.kind === 'continue') {
-      ctx.state[outcome.store ?? p.store ?? nodeId] = { error: outcome.error ?? 'agent failed' }
+      ctx.state[outcome.store ?? p.store ?? node.store ?? nodeId] = { error: outcome.error ?? `${what} failed` }
       return { kind: 'ok' }
     }
     if (p !== undefined && p.kind === 'goto') {
@@ -183,14 +205,14 @@ export async function runOrchestrator(
           return { kind: 'ok' }
         }
         if (ctx.hooks.isRunPaused?.()) return { kind: 'paused' }
-        return handleAgentFailure(node, nodeId, outcome)
+        return handleFailure(node, nodeId, outcome, 'agent')
       }
       case 'decision': {
         const outcome = await runAgentWithRetry(node)
         ctx.lastNodeId = nodeId
         if (!outcome.ok) {
           if (ctx.hooks.isRunPaused?.()) return { kind: 'paused' }
-          return handleAgentFailure(node, nodeId, outcome)
+          return handleFailure(node, nodeId, outcome, 'agent')
         }
         if (outcome.store !== undefined) ctx.state[outcome.store] = outcome.value
         // Route by the selected output field's String value (decision routing).
@@ -203,6 +225,36 @@ export async function runOrchestrator(
         }
         const refs: (string | FlowNode)[] = Array.isArray(target) ? target : [target]
         ctx.stack.push({ type: 'seq', refs, index: 0, checkpoint: false })
+        return { kind: 'ok' }
+      }
+      case 'code': {
+        if (ctx.hooks.runCode === undefined) {
+          return { kind: 'error', node: nodeId, message: 'code nodes are not supported by this runtime' }
+        }
+        // Retries stay engine-owned: a pure code node is cheap to re-run.
+        const retryMax = node.onError?.kind === 'retry' ? (node.onError.max ?? 0) : 0
+        let outcome: CodeRunOutcome = { ok: false, error: 'unknown' }
+        for (let attempt = 0; attempt <= retryMax; attempt++) {
+          outcome = await ctx.hooks.runCode(node, env())
+          if (outcome.ok) break
+          if (ctx.hooks.isRunPaused?.()) break
+        }
+        ctx.lastNodeId = nodeId
+        if (!outcome.ok) {
+          if (ctx.hooks.isRunPaused?.()) return { kind: 'paused' }
+          if (outcome.fatal === true) return { kind: 'failed', message: outcome.error ?? `node ${nodeId} failed` }
+          return handleFailure(node, nodeId, outcome, 'code')
+        }
+        if (outcome.patch !== undefined) {
+          for (const [key, value] of Object.entries(outcome.patch)) ctx.state[key] = value
+        }
+        if (outcome.value !== undefined) {
+          if (node.store === undefined) {
+            return { kind: 'error', node: nodeId, message: 'code node returned a value but declares no store' }
+          }
+          ctx.state[node.store] = outcome.value
+        }
+        if (outcome.signal === 'break') return { kind: 'break' }
         return { kind: 'ok' }
       }
       case 'parallel': {

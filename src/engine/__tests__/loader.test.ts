@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadFlow, listBuiltins } from '../loader.ts'
+import { hashSpec } from '../checkpoint.ts'
 
 const AGENTS = `export const agents = {
   worker: { id: 'worker', persona: 'p', model: { provider: 'deepseek-official', model: 'deepseek-v4-flash' }, memory: 'none' },
@@ -127,5 +128,67 @@ describe('loader', () => {
     })
     expect(loaded.input['file']).toBe(absolute)
     expect(loaded.input['prompt']).toBe('long prompt')
+  })
+
+  function makeBundleFlow(): string {
+    const parent = mkdtempSync(join(tmpdir(), 'wfe-bundle-'))
+    const dir = join(parent, 'flow')
+    mkdirSync(join(dir, 'personas'), { recursive: true })
+    mkdirSync(join(dir, 'code'), { recursive: true })
+    writeFileSync(join(dir, 'personas', 'reviewer.md'), 'You are a reviewer.')
+    writeFileSync(join(dir, 'code', 'step.mjs'), 'export default () => ({ value: 7 })')
+    writeFileSync(join(dir, 'agents.js'), `export const agents = {
+      w: { id: 'w', personaRef: 'reviewer', model: { provider: 'deepseek-official', model: 'deepseek-v4-flash' }, memory: 'none' },
+    }`)
+    writeFileSync(join(dir, 'flow.spec.js'), `export default {
+      name: 'tmp-bundle',
+      state: { n: { type: 'number' } },
+      entry: 'main',
+      nodes: { main: { kind: 'code', run: { module: './code/step.mjs' }, store: 'n' } },
+    }`)
+    return dir
+  }
+
+  it('resolves personaRef and records the flow bundle by content', async () => {
+    const dir = makeBundleFlow()
+    const loaded = await loadFlow({ flow: dir })
+    expect(loaded.agents['w']?.persona).toBe('You are a reviewer.')
+    expect(loaded.bundle.map(entry => entry.file).sort()).toEqual(['code/step.mjs', 'personas/reviewer.md'])
+    expect(loaded.bundle.every(entry => entry.sha256.length === 64)).toBe(true)
+  })
+
+  it('changes the spec hash when a bundled code module changes', async () => {
+    const dir = makeBundleFlow()
+    const first = await loadFlow({ flow: dir })
+    const before = hashSpec(first.spec, first.agents, first.bundle)
+    writeFileSync(join(dir, 'code', 'step.mjs'), 'export default () => ({ value: 8 })')
+    const second = await loadFlow({ flow: dir })
+    expect(hashSpec(second.spec, second.agents, second.bundle)).not.toBe(before)
+  })
+
+  it('reports a missing personaRef file', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'wfe-persona-'))
+    const dir = join(parent, 'flow')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'agents.js'), `export const agents = {
+      w: { id: 'w', personaRef: 'ghost', model: { provider: 'p', model: 'm' }, memory: 'none' },
+    }`)
+    writeFileSync(join(dir, 'flow.spec.js'), `export default { name: 'tmp-persona', entry: 'main', state: {}, nodes: { main: { kind: 'set', assign: { x: '1' } } } }`)
+    await expect(loadFlow({ flow: dir })).rejects.toThrow(/personaRef "ghost" not found/)
+  })
+
+  it('rejects a code module outside the flow directory', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'wfe-escape-'))
+    const dir = join(parent, 'flow')
+    mkdirSync(dir)
+    writeFileSync(join(parent, 'escape.mjs'), 'export default () => ({})')
+    writeFileSync(join(dir, 'agents.js'), AGENTS)
+    writeFileSync(join(dir, 'flow.spec.js'), `export default {
+      name: 'tmp-escape',
+      state: {},
+      entry: 'main',
+      nodes: { main: { kind: 'code', run: { module: '../escape.mjs' } } },
+    }`)
+    await expect(loadFlow({ flow: dir })).rejects.toThrow(/outside the flow directory/)
   })
 })

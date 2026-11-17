@@ -59,7 +59,38 @@ run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导
 
 ## 编写 flow
 
-每个 flow 是一个目录，含 `agents.js` 与 `flow.spec.js` 两个 JS 数据模块。节点：`agent/decision/branch/sequence/parallel/map/loop/set/push/emit/break/fail`。模板只做取值（支持 `{flowId}`/`{runId}`/裸路径 `{splitResult.tasks}`），逻辑放谓词（`branch.if`、`loop.until`）。每个 `loop` 必须带 `maxIter`（`break` 须位于循环内，引擎校验）；`fail` 节点令运行以 `stopReason:'failed'` 结束。`decision` 节点可用 `routeField` 指定结构化输出中用于路由的字段，按 `cases`（键为字段值的字符串）跳转，`default` 兜底。spec 级 `defaults: { timeoutMs, runTimeoutMs }` 可覆盖插件配置的默认超时；spec 的 `timeoutMs` 被 clamp 到 `[defaultTimeoutMs, maxTimeoutMs]`（config），可调高、不可低于全局下限。续跑（resumeRunId）会恢复流程 state/stack **并恢复** session-mode agent 的会话记忆（其持久化会话被 resume；缺失则回退新建）。`runTimeoutMs` 到点会**打断在跑的 agent**（暂停优先于重试/报错）。`flowId`/`agentId`/`runId` 仅允许 `[a-zA-Z0-9_-]`（防目录穿越）。
+每个 flow 是一个目录，含 `agents.js`、`flow.spec.js` 两个 JS 数据模块，以及可选的 bundle 文件：`personas/<name>.md`（供 `personaRef` 引用）与 `code/<name>.mjs`（供 code 节点引用）。节点：`agent/decision/code/branch/sequence/parallel/map/loop/set/push/emit/break/fail`。模板只做取值（支持 `{flowId}`/`{runId}`/裸路径 `{splitResult.tasks}`），逻辑放谓词（`branch.if`、`loop.until`）。每个 `loop` 必须带 `maxIter`（`break` 须位于循环内，引擎校验）；`fail` 节点令运行以 `stopReason:'failed'` 结束。`decision` 节点可用 `routeField` 指定结构化输出中用于路由的字段，按 `cases`（键为字段值的字符串）跳转，`default` 兜底。spec 级 `defaults: { timeoutMs, runTimeoutMs }` 可覆盖插件配置的默认超时；spec 的 `timeoutMs` 被 clamp 到 `[defaultTimeoutMs, maxTimeoutMs]`（config），可调高、不可低于全局下限。续跑（resumeRunId）会恢复流程 state/stack **并恢复** session-mode agent 的会话记忆（其持久化会话被 resume；缺失则回退新建）。`runTimeoutMs` 到点会**打断在跑的 agent**（暂停优先于重试/报错）。`flowId`/`agentId`/`runId` 仅允许 `[a-zA-Z0-9_-]`（防目录穿越）。
+
+**bundle 与哈希**：加载时解析 `personaRef` 与所有 code 模块，按内容把每个文件记入 flow bundle，并计入 `specHash`——改 persona/code 会让旧 checkpoint 无法静默续跑（混跑新旧代码）。
+
+### code 节点（确定性步骤）
+
+code 节点是与 agent 同级的一等节点：把“确定性计算”（解析/校验/变换 JSON、过滤排序去重、算术、哈希）从 LLM 手里拿回来。它不是“用代码写流程”——控制流、重试、checkpoint 仍归引擎。
+
+```js
+// flow.spec.js
+normalize: { kind: 'code', run: { module: './code/normalize.mjs' }, store: 'tasks' },
+count:     { kind: 'code', run: 'return { value: state.tasks.length }', store: 'taskCount' },
+guard:     { kind: 'code', run: { module: './code/guard.mjs' }, timeoutMs: 5000, onError: { kind: 'goto', node: 'repair' } },
+```
+
+```js
+// code/normalize.mjs —— 默认导出函数
+export default ({ state, get, fail }) => {
+  const raw = get('splitResult.tasks')
+  if (!Array.isArray(raw)) fail('splitResult.tasks is not an array')
+  return { patch: { tasks: raw.map(t => String(t).trim()).filter(Boolean) } }
+}
+```
+
+契约：
+
+- 入参 `{ state, item?, loopIndex?, get(path), render(template), now(), log(msg), fail(msg), signal }`；**没有** `ctx`、不能调 agent。
+- 返回 `{ patch?, value?, signal?: 'break' }` 或空：`patch` 合并进 state，`value` 写入节点的 `store`，`signal:'break'` 退出最近循环。
+- `fail(msg)` → `stopReason:'failed'`（同 `fail` 节点，绕过 `onError`）；抛异常是普通节点错误，走 `onError`（retry/continue/goto/abort）。
+- **必须是纯函数**：resume 会重放 code 节点，I/O 会执行两次。`timeoutMs`（默认 5s）是协作式超时，只对 async body 生效，在 await 边界检查。
+- code body 是宿主进程里的可信代码（与 `flow.spec.js` 同级信任）；它拿不到 `ctx`，也不能启动 agent。
+- 内联 body 适合一行表达式；更长的逻辑用模块，便于测试与 review。
 
 **单 agent 工具与技能（按文件/文件夹绝对路径加载）**：`AgentConfig.tools` 为**绝对路径**的 ESM 插件模块文件（`.js/.mjs/.ts`，导出 Cordis 插件 `apply(ctx)`，内部 `ctx.tools.register`），加载到该 agent 作用域（仅该 agent 可见）；缺失/非法文件在创建 agent 时 fail-loud。`AgentConfig.skills` 为**直接含 `SKILL.md` 的技能文件夹**（绝对路径）——引擎以其父目录为隔离技能根（`includeDefaultRoots:false`），该 agent 只见这些技能。加载任意代码属 shell 级信任。
 

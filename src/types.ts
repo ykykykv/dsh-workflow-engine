@@ -116,6 +116,24 @@ export interface FailNode {
   message: string
 }
 
+/**
+ * Deterministic step: a plain function with a narrow API. It is NOT "writing
+ * the flow in code" — control flow stays in the graph; this node only computes.
+ */
+export interface CodeNode {
+  kind: 'code'
+  /**
+   * Inline body (a function body with `return`, compiled in-process) or a
+   * module inside the flow directory exporting a default function.
+   */
+  run: string | { module: string }
+  /** State key that receives the function's `value` result (if it returns one). */
+  store?: string
+  /** Cooperative timeout for async bodies (default 5s, clamped by the plugin). */
+  timeoutMs?: number
+  onError?: OnErrorPolicy
+}
+
 export type FlowNode =
   | AgentNode
   | DecisionNode
@@ -129,6 +147,7 @@ export type FlowNode =
   | EmitNode
   | BreakNode
   | FailNode
+  | CodeNode
 
 /** One declarative workflow. */
 export interface FlowSpec {
@@ -150,7 +169,11 @@ export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
 /** One agent's configuration (single source of truth for runtime + materialization). */
 export interface AgentConfig {
   id: string
-  persona: string
+  /** Inline persona text. Exactly one of `persona` / `personaRef` is required. */
+  persona?: string
+  /** Name under the flow's `personas/<name>.md` (resolved by the loader, hashed
+   * into the flow bundle). Exactly one of `persona` / `personaRef` is required. */
+  personaRef?: string
   /** Absolute paths to ESM plugin-module files (e.g. `D:\\tools\\my-tool.js`) that
    * export a Cordis plugin (apply) and are loaded into this agent's scope. */
   tools?: string[]
@@ -220,6 +243,15 @@ export interface RunWorkflowStarted {
   runId: string
   jobId: string
   message: string
+}
+
+/** One external file a flow depends on (code module or persona), by content. */
+export interface BundleFile {
+  /** Path relative to the flow directory, POSIX separators. */
+  file: string
+  /** sha256 of the file's bytes. */
+  sha256: string
+  bytes: number
 }
 
 /** Environment for template/predicate evaluation. */

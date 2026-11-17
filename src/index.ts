@@ -23,6 +23,9 @@ import { defaultReaders } from './engine/readers.ts'
 import type { AgentPresetsLike } from './engine/preset-mount.ts'
 import { acquireLease } from './engine/lease.ts'
 import { backgroundJobs, outcomeOf, runWithAutoResume, truncate, type JobOutcomeLike } from './engine/background.ts'
+import { CodeFailError, executeCodeNode, type CodeNodeApi } from './engine/code.ts'
+import { getPath } from './engine/path.ts'
+import { renderTemplate } from './engine/template.ts'
 
 export const name = '@deepseek-ai/dsh-workflow-engine'
 export const inject = ['tools', 'agents']
@@ -334,7 +337,7 @@ async function executeRun(
     await materializeAgents(loaded.agents, { workspaceRoot, flowId, pluginVersion: PLUGIN_VERSION })
 
     const monitor = control.monitor ?? null
-    const specHash = hashSpec(loaded.spec, loaded.agents)
+    const specHash = hashSpec(loaded.spec, loaded.agents, loaded.bundle)
     monitor?.runStart(loaded.name)
 
     let initialState: Record<string, unknown> = { ...(loaded.input ?? {}) }
@@ -396,6 +399,7 @@ async function executeRun(
       runTimer = setTimeout(() => runAbort.abort(), runBudget)
     }
 
+    const readers = defaultReaders()
     const hooks: OrchestratorHooks = {
       async runAgent(node, taskText) {
         if (runAbort.signal.aborted) return { ok: false, error: 'run paused (timeout)' }
@@ -414,6 +418,33 @@ async function executeRun(
         monitor?.agentEnd(seq, result.ok ? 'completed' : 'failed')
         return { ok: result.ok, store: node.store, value: result.value, error: result.error }
       },
+      async runCode(node, env) {
+        const api: CodeNodeApi = {
+          state: env.state,
+          item: env.item,
+          loopIndex: env.loopIndex,
+          get: path => getPath(env.state, path),
+          render: template => renderTemplate(template, env, readers),
+          now: () => Date.now(),
+          log: (message) => {
+            const line = `[workflow:${flowId}] code ${message}`
+            control.onLog?.(line)
+            console.log(line)
+          },
+          fail: (message: string): never => { throw new CodeFailError(message) },
+          signal: control.signal,
+        }
+        try {
+          const result = await executeCodeNode(node, api, {
+            baseDir: loaded.dir,
+            timeoutMs: clampTimeout(node.timeoutMs, 5_000, resolved.defaultTimeoutMs),
+          })
+          return { ok: true, ...result }
+        } catch (error) {
+          if (error instanceof CodeFailError) return { ok: false, fatal: true, error: error.message }
+          return { ok: false, error: messageOf(error) }
+        }
+      },
       emit: (event, payload) => {
         const line = `[workflow:${flowId}] ${event}${payload === undefined ? '' : ` ${JSON.stringify(payload)}`}`
         control.onLog?.(line)
@@ -428,7 +459,7 @@ async function executeRun(
       isRunPaused: () => runAbort.signal.aborted,
       now: () => Date.now(),
       runTimeoutMs: () => loaded.spec.defaults?.runTimeoutMs ?? resolved.runTimeoutMs,
-      readers: defaultReaders(),
+      readers,
     }
 
     const result = await runOrchestrator(loaded.spec, loaded.agents, initialState, loaded.spec.entry, hooks, restore, { flowId, runId })

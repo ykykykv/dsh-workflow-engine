@@ -29,7 +29,7 @@ export function renderAgentPreset(agent: AgentConfig, configHash: string, versio
   lines.push("  name: '@deepseek-ai/dsh-persona'")
   lines.push('  config:')
   lines.push('    text: |-')
-  for (const line of agent.persona.split('\n')) lines.push(`      ${line}`)
+  for (const line of (agent.persona ?? '').split('\n')) lines.push(`      ${line}`)
   if (agent.promptSections && agent.promptSections.length > 0) {
     lines.push('')
     lines.push('# prompt sections (reference only)')

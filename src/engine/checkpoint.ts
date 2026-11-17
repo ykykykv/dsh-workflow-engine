@@ -5,7 +5,7 @@
 
 import { createHash } from 'node:crypto'
 import { rename, rm, writeFile } from 'node:fs/promises'
-import type { AgentConfig, Checkpoint, FlowSpec } from '../types.ts'
+import type { AgentConfig, BundleFile, Checkpoint, FlowSpec } from '../types.ts'
 
 const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -42,9 +42,17 @@ export async function atomicWriteFile(path: string, content: string): Promise<vo
     try { await rm(tmp, { force: true }) } catch { /* ignore */ }
   }
 }
-/** Stable hash of the loaded spec + agents: the resume gate. */
-export function hashSpec(spec: FlowSpec, agents: Record<string, AgentConfig>): string {
-  const stable = JSON.stringify({ spec, agents })
+/**
+ * Stable hash of the loaded spec + agents + referenced bundle files: the resume
+ * gate. Code modules and persona files participate by content, so editing them
+ * changes the hash and blocks a resume that would mix old and new behavior.
+ */
+export function hashSpec(
+  spec: FlowSpec,
+  agents: Record<string, AgentConfig>,
+  bundle: readonly BundleFile[] = [],
+): string {
+  const stable = JSON.stringify({ spec, agents, bundle })
   return createHash('sha256').update(stable).digest('hex')
 }
 

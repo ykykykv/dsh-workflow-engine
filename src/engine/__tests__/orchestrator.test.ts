@@ -33,6 +33,85 @@ describe('orchestrator', () => {
     expect(r.lastNodeId).toBe('b')
   })
 
+  it('applies a code node patch and value', async () => {
+    const spec: FlowSpec = {
+      name: 'code', state: { total: { type: 'number' }, label: { type: 'string' } },
+      entry: 'main',
+      nodes: {
+        main: { kind: 'sequence', nodes: ['compute'] },
+        compute: { kind: 'code', run: 'return {}', store: 'total' },
+      },
+    }
+    const seen: unknown[] = []
+    const hooks = makeHooks({
+      runCode: async (_node, env) => {
+        seen.push(env.state)
+        return { ok: true, patch: { label: 'seven' }, value: 7 }
+      },
+    })
+    const r = await runOrchestrator(spec, agents, {}, 'main', hooks)
+    expect(r.stopReason).toBe('completed')
+    expect(r.state['total']).toBe(7)
+    expect(r.state['label']).toBe('seven')
+    expect(seen.length).toBe(1)
+  })
+
+  it('maps code fail/throw to failed/error and honors continue', async () => {
+    const spec: FlowSpec = {
+      name: 'code-fail', state: { out: { type: 'json' } },
+      entry: 'main',
+      nodes: {
+        main: { kind: 'sequence', nodes: ['bad'] },
+        bad: { kind: 'code', run: 'fail("nope")', onError: { kind: 'continue', store: 'out' } },
+      },
+    }
+    const recovered = await runOrchestrator(spec, agents, {}, 'main', makeHooks({
+      runCode: async () => ({ ok: false, error: 'nope' }),
+    }))
+    expect(recovered.stopReason).toBe('completed')
+    expect(recovered.state['out']).toEqual({ error: 'nope' })
+
+    const fatal = await runOrchestrator(spec, agents, {}, 'main', makeHooks({
+      runCode: async () => ({ ok: false, fatal: true, error: 'nope' }),
+    }))
+    expect(fatal.stopReason).toBe('failed')
+
+    const errored = await runOrchestrator(
+      { ...spec, nodes: { main: { kind: 'code', run: 'x', onError: { kind: 'abort' } } } },
+      agents, {}, 'main',
+      makeHooks({ runCode: async () => ({ ok: false, error: 'boom' }) }),
+    )
+    expect(errored.stopReason).toBe('error')
+  })
+
+  it('supports break from a code node inside a loop', async () => {
+    const spec: FlowSpec = {
+      name: 'code-break', state: {},
+      entry: 'main',
+      nodes: {
+        main: { kind: 'loop', maxIter: 5, body: ['step'] },
+        step: { kind: 'code', run: 'return {}' },
+      },
+    }
+    let calls = 0
+    const r = await runOrchestrator(spec, agents, {}, 'main', makeHooks({
+      runCode: async () => { calls++; return calls >= 2 ? { ok: true, signal: 'break' } : { ok: true } },
+    }))
+    expect(r.stopReason).toBe('completed')
+    expect(calls).toBe(2)
+  })
+
+  it('rejects a code node when the runtime has no executor', async () => {
+    const spec: FlowSpec = {
+      name: 'no-code', state: {},
+      entry: 'main',
+      nodes: { main: { kind: 'code', run: 'return {}' } },
+    }
+    const r = await runOrchestrator(spec, agents, {}, 'main', makeHooks())
+    expect(r.stopReason).toBe('error')
+    expect(r.error?.message).toContain('code nodes are not supported')
+  })
+
   it('executes a loop with break', async () => {
     const spec: FlowSpec = {
       name: 's', state: {},

@@ -30,7 +30,7 @@ export function asRefList(ref: string | string[]): (string | FlowNode)[] {
   return Array.isArray(ref) ? ref : [ref]
 }
 
-function nodeRefs(n: FlowNode): (string | FlowNode)[] {
+export function childRefs(n: FlowNode): (string | FlowNode)[] {
   switch (n.kind) {
     case 'sequence': return n.nodes
     case 'branch': return [...asRefList(n.then), ...(n.else === undefined ? [] : asRefList(n.else))]
@@ -53,7 +53,7 @@ export function collectAgentIds(spec: FlowSpec, refs: (string | FlowNode)[]): st
     const node = resolveNode(spec, ref)
     if (!node) return
     if (node.kind === 'agent' || node.kind === 'decision') out.push(node.agent)
-    for (const r of nodeRefs(node)) visit(r)
+    for (const r of childRefs(node)) visit(r)
   }
   for (const r of refs) visit(r)
   return out
@@ -76,11 +76,11 @@ function collectReachableNamedNodes(spec: FlowSpec): Set<string> {
       const node = spec.nodes[ref]
       if (!node) return
       visited.add(ref)
-      walkRefs(nodeRefs(node))
+      walkRefs(childRefs(node))
       if (node.kind === 'decision') walkDecision(node)
       return
     }
-    walkRefs(nodeRefs(ref))
+    walkRefs(childRefs(ref))
     if (ref.kind === 'decision') walkDecision(ref)
   }
   walk(spec.entry)
@@ -99,11 +99,11 @@ function validateBreakPlacement(spec: FlowSpec, errors: string[]): void {
         visited.add(ref)
         if (node.kind === 'break' && !insideLoop) errors.push(`node ${ref}: break must be inside a loop`)
         if (node.kind === 'loop') walk(node.body, true, visited)
-        else walk(nodeRefs(node), insideLoop, visited)
+        else walk(childRefs(node), insideLoop, visited)
       } else {
         if (ref.kind === 'break' && !insideLoop) errors.push('inline break must be inside a loop')
         if (ref.kind === 'loop') walk(ref.body, true, visited)
-        else walk(nodeRefs(ref), insideLoop, visited)
+        else walk(childRefs(ref), insideLoop, visited)
       }
     }
   }
@@ -240,6 +240,21 @@ export function validateFlowSpec(
       case 'fail':
         if (typeof node.message !== 'string' || node.message === '') errors.push(`node ${id}: fail requires a message`)
         break
+      case 'code': {
+        if (typeof node.run === 'string') {
+          if (node.run.trim() === '') errors.push(`node ${id}: code.run must be a non-empty body or { module }`)
+        } else if (node.run === null || typeof node.run !== 'object' || typeof node.run.module !== 'string' || node.run.module === '') {
+          errors.push(`node ${id}: code.run must be a non-empty body or { module: "./file.mjs" }`)
+        }
+        if (node.store !== undefined && (typeof node.store !== 'string' || node.store === '')) {
+          errors.push(`node ${id}: code.store must be a non-empty state key`)
+        }
+        if (node.timeoutMs !== undefined && (typeof node.timeoutMs !== 'number' || !(node.timeoutMs > 0))) {
+          errors.push(`node ${id}: code.timeoutMs must be a positive number`)
+        }
+        if (node.onError !== undefined) validateOnError(node.onError, errors)
+        break
+      }
       default:
         errors.push(`node ${id}: unknown node kind`)
     }
@@ -305,7 +320,15 @@ export function validateAgents(agents: Record<string, AgentConfig>): ValidationR
     if (a === null || typeof a !== 'object') { errors.push(`agent ${id}: expected an object`); continue }
     const idErr = assertSafeId(`agent id`, id)
     if (idErr !== null) errors.push(`agent ${id}: ${idErr}`)
-    if (typeof a.persona !== 'string') errors.push(`agent ${id}: persona must be a string`)
+    if (typeof a.persona !== 'string' && typeof a.personaRef !== 'string') {
+      errors.push(`agent ${id}: persona or personaRef is required`)
+    }
+    if (typeof a.persona === 'string' && typeof a.personaRef === 'string') {
+      errors.push(`agent ${id}: persona and personaRef are mutually exclusive`)
+    }
+    if (typeof a.personaRef === 'string' && !/^[A-Za-z0-9_-]+$/.test(a.personaRef)) {
+      errors.push(`agent ${id}: personaRef must match [A-Za-z0-9_-]+`)
+    }
     if (a.tools !== undefined) {
       if (!Array.isArray(a.tools) || !a.tools.every(t => typeof t === 'string')) {
         errors.push(`agent ${id}: tools must be an array of absolute file paths`)

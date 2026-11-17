@@ -98,12 +98,45 @@ Result shape (foreground):
 
 ## Authoring a flow
 
-A flow is a directory with two JS data modules:
+A flow is a directory with two JS data modules plus optional bundle files:
 
-- `agents.js` — `export const agents = { <id>: { id, persona, model: { provider, model }, memory: 'session'|'none', tools?, skills?, sandbox?, promptSections?, presetId? } }`
+- `agents.js` — `export const agents = { <id>: { id, persona | personaRef, model: { provider, model }, memory: 'session'|'none', tools?, skills?, sandbox?, promptSections?, presetId? } }`
 - `flow.spec.js` — `export default { name, state, defaults?, onError?, outputs?, entry, nodes }`
+- `personas/<name>.md` — shared persona text for `personaRef: '<name>'` (tried as `.md`, `.markdown`, `.txt`).
+- `code/<name>.mjs` — bodies for `code` nodes (`{ module: './code/<name>.mjs' }`).
 
-Node kinds: `agent` / `decision` / `branch` / `sequence` / `parallel` / `map` / `loop` / `set` / `push` / `emit` / `break` / `fail`.
+Node kinds: `agent` / `decision` / `code` / `branch` / `sequence` / `parallel` / `map` / `loop` / `set` / `push` / `emit` / `break` / `fail`.
+
+The loader resolves `personaRef` and every referenced code module, hashes each file's bytes into the run's **flow bundle**, and folds that into the resume gate: editing a persona or a code module changes `specHash`, so an old checkpoint cannot silently resume against new code.
+
+### Deterministic `code` nodes
+
+A `code` node is a first-class non-agent step: it does the computation the flow would otherwise have to ask an agent for (parse/validate/transform JSON, filter/sort/dedupe, arithmetic, hashing). It is **not** "the flow written in code" — control flow, retries, and checkpointing stay with the engine.
+
+```js
+// flow.spec.js
+normalize: { kind: 'code', run: { module: './code/normalize.mjs' }, store: 'tasks' },
+count:     { kind: 'code', run: 'return { value: state.tasks.length }', store: 'taskCount' },
+guard:     { kind: 'code', run: { module: './code/guard.mjs' }, timeoutMs: 5000, onError: { kind: 'goto', node: 'repair' } },
+```
+
+```js
+// code/normalize.mjs — default-exported function
+export default ({ state, get, fail }) => {
+  const raw = get('splitResult.tasks')
+  if (!Array.isArray(raw)) fail('splitResult.tasks is not an array')
+  return { patch: { tasks: raw.map(t => String(t).trim()).filter(Boolean) } }
+}
+```
+
+Contract:
+
+- The body receives `{ state, item?, loopIndex?, get(path), render(template), now(), log(msg), fail(msg), signal }`. No `ctx`, no agent access.
+- It returns `{ patch?: object, value?, signal?: 'break' }` (or nothing). `patch` merges into the run state; `value` is stored at the node's `store`; `signal: 'break'` exits the nearest loop.
+- `fail(msg)` ends the run with `stopReason: 'failed'` (like a `fail` node, bypassing `onError`); a thrown error is a normal node error and honors `onError` (`retry`/`continue`/`goto`/`abort`).
+- Bodies must be **pure**: a resume replays every code node, so I/O would run twice. `timeoutMs` (default 5s) is cooperative — it applies to async bodies and is checked at await boundaries.
+- Code bodies are trusted code running in the host process, exactly like `flow.spec.js` itself (shell-level trust); they cannot reach `ctx` or start agents.
+- Inline bodies (`run: 'return …'`) are convenient for one-liners; anything longer should be a module so it can be tested and reviewed.
 
 Per-agent tools & skills (loaded from absolute file/folder paths):
 
