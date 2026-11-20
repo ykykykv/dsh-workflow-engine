@@ -51,6 +51,20 @@ describe('validate', () => {
     expect(bad({ kind: 'code', run: 'return 1', timeoutMs: 0 })).toContain('code.timeoutMs must be a positive number')
     expect(bad({ kind: 'code', run: 'return 1' })).toBe('')
   })
+  it('validates visibility and transcript knobs', () => {
+    const bad = validateAgents({
+      ...agents,
+      w: {
+        id: 'w', persona: 'p', model: { provider: 'p', model: 'm' }, memory: 'none',
+        visibility: 'nope' as unknown as 'listed',
+        transcript: 'all' as unknown as 'run',
+      },
+    })
+    expect(bad.errors.join('; ')).toContain("visibility must be 'listed' or 'hidden'")
+    expect(bad.errors.join('; ')).toContain("transcript must be 'none' or 'run'")
+    const spec = validateFlowSpec({ ...base, defaults: { visibility: 'nope' as unknown as 'listed' } }, agents, {}, readers)
+    expect(spec.errors.join('; ')).toContain('defaults.visibility')
+  })
   it('requires exactly one of persona / personaRef', () => {
     const both = {
       ...agents,

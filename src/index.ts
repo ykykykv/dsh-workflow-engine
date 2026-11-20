@@ -26,6 +26,7 @@ import { backgroundJobs, outcomeOf, runWithAutoResume, truncate, type JobOutcome
 import { CodeFailError, executeCodeNode, type CodeNodeApi } from './engine/code.ts'
 import { getPath } from './engine/path.ts'
 import { renderTemplate } from './engine/template.ts'
+import { writeTranscript } from './engine/transcript.ts'
 
 export const name = '@deepseek-ai/dsh-workflow-engine'
 export const inject = ['tools', 'agents']
@@ -366,7 +367,17 @@ async function executeRun(
       seedSessions = cp.agentSessions
     }
 
-    const runner = new AgentRunner(ctx, flowId, runId, workspaceRoot, control.parent, seedSessions)
+    const transcripts: Record<string, string> = {}
+    const runner = new AgentRunner(ctx, flowId, runId, workspaceRoot, control.parent, seedSessions, {
+      defaultVisibility: loaded.spec.defaults?.visibility,
+      onTranscript: async (agentId, _config, session) => {
+        const file = await writeTranscript(join(workspaceRoot, flowId, 'runs', runId, 'agents'), agentId, session)
+        transcripts[agentId] = file
+        const line = `[workflow:${flowId}] transcript ${agentId} → ${file}`
+        control.onLog?.(line)
+        console.log(line)
+      },
+    })
     let seq = 0
 
     const saveCheckpoint = async (snapshot: { lastNodeId: string | null; stack: Frame[]; state: Record<string, unknown> }): Promise<void> => {
@@ -482,6 +493,7 @@ async function executeRun(
       runId,
       result: result.stopReason === 'completed' ? summarize(result.state) : undefined,
       ...(outputs.length > 0 ? { outputs } : {}),
+      ...(Object.keys(transcripts).length > 0 ? { transcripts } : {}),
       ...(result.error ? { error: { node: result.error.node, message: result.error.message, checkpointPath } } : {}),
     }
     if (result.stopReason === 'paused') {

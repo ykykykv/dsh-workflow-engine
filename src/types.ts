@@ -154,7 +154,12 @@ export interface FlowSpec {
   name: string
   description?: string
   state: StateShape
-  defaults?: { timeoutMs?: number; runTimeoutMs?: number }
+  defaults?: {
+    timeoutMs?: number
+    runTimeoutMs?: number
+    /** Sidebar visibility for member sessions; agents may override. */
+    visibility?: 'listed' | 'hidden'
+  }
   onError?: OnErrorPolicy
   /** Path templates (rendered with {state, flowId, runId}) of output files the
    * engine collects to `outputDir/<runId>/` after the run. */
@@ -174,6 +179,19 @@ export interface AgentConfig {
   /** Name under the flow's `personas/<name>.md` (resolved by the loader, hashed
    * into the flow bundle). Exactly one of `persona` / `personaRef` is required. */
   personaRef?: string
+  /**
+   * Sidebar visibility of this agent's session. `hidden` marks the session with
+   * DSH's `origin: 'subagent'`, which keeps it out of every workspace bucket
+   * (including "Ungrouped"); the transcript is still persisted on disk.
+   * Default: the flow's `defaults.visibility`, else `listed`.
+   */
+  visibility?: 'listed' | 'hidden'
+  /**
+   * Also write the session transcript to `runs/<runId>/agents/<agentId>.jsonl`
+   * (a durable per-run copy; the session store keeps its own record either way).
+   * Default `none`.
+   */
+  transcript?: 'none' | 'run'
   /** Absolute paths to ESM plugin-module files (e.g. `D:\\tools\\my-tool.js`) that
    * export a Cordis plugin (apply) and are loaded into this agent's scope. */
   tools?: string[]
@@ -235,6 +253,8 @@ export interface RunWorkflowResult {
   message?: string
   /** Checkpoint backing a paused run, so a caller can inspect or resume it. */
   checkpointPath?: string
+  /** Per-agent transcript copies written under `runs/<runId>/agents/` (agentId → path). */
+  transcripts?: Record<string, string>
 }
 
 /** Immediate result of a `background: true` call. */

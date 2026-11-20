@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import type { Context } from '@deepseek-ai/cordis'
 import { SessionRegistry } from '../session-registry.ts'
 import { mountPreset, type AgentPresetsLike } from '../preset-mount.ts'
-import type { Context } from '@deepseek-ai/cordis'
+import { buildSessionMeta } from '../session-meta.ts'
 
 const ctx = {} as Context
 
@@ -60,5 +61,25 @@ describe('preset mount cross-version alias (code <-> ptc)', () => {
     }
     await mountPreset(presets, ctx, undefined)
     expect(calls).toEqual([undefined])
+  })
+})
+
+describe('buildSessionMeta', () => {
+  it('marks hidden sessions with DSH\'s only subagent marker', () => {
+    const meta = buildSessionMeta({ cwd: 'C:/run/w', presetId: 'standard', parentSessionId: 'parent' as never, hidden: true })
+    expect(meta).toEqual({
+      cwd: 'C:/run/w',
+      agentPreset: 'standard',
+      parentSession: 'parent',
+      origin: 'subagent',
+      delegationDepth: 1,
+    })
+  })
+
+  it('leaves listed sessions ordinary (no origin, no depth)', () => {
+    const meta = buildSessionMeta({ cwd: 'C:/run/w', hidden: false })
+    expect(meta).toEqual({ cwd: 'C:/run/w' })
+    expect('origin' in meta).toBe(false)
+    expect('parentSession' in meta).toBe(false)
   })
 })

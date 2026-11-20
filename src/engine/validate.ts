@@ -184,6 +184,10 @@ export function validateFlowSpec(
     return { ok: false, errors }
   }
 
+  if (spec.defaults?.visibility !== undefined && spec.defaults.visibility !== 'listed' && spec.defaults.visibility !== 'hidden') {
+    errors.push("spec.defaults.visibility must be 'listed' or 'hidden'")
+  }
+
   // entry exists
   if (typeof spec.entry === 'string' && spec.nodes[spec.entry] === undefined) {
     errors.push(`spec: entry node "${spec.entry}" not found`)
@@ -328,6 +332,12 @@ export function validateAgents(agents: Record<string, AgentConfig>): ValidationR
     }
     if (typeof a.personaRef === 'string' && !/^[A-Za-z0-9_-]+$/.test(a.personaRef)) {
       errors.push(`agent ${id}: personaRef must match [A-Za-z0-9_-]+`)
+    }
+    if (a.visibility !== undefined && a.visibility !== 'listed' && a.visibility !== 'hidden') {
+      errors.push(`agent ${id}: visibility must be 'listed' or 'hidden'`)
+    }
+    if (a.transcript !== undefined && a.transcript !== 'none' && a.transcript !== 'run') {
+      errors.push(`agent ${id}: transcript must be 'none' or 'run'`)
     }
     if (a.tools !== undefined) {
       if (!Array.isArray(a.tools) || !a.tools.every(t => typeof t === 'string')) {

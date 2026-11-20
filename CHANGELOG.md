@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.0.22 — 2026-11-20 (unreleased)
+
+### Added
+
+- **`visibility: 'hidden'`** on an agent (or `defaults.visibility` on the flow): the member
+  session is created with DSH's `origin: 'subagent'` marker (plus `parentSession` lineage and
+  `delegationDepth: 1`). The Web client hides `origin === 'subagent'` sessions from every
+  workspace bucket, so workflow members no longer pile up under "Ungrouped". The transcript is
+  still persisted by DSH — this is a visibility switch, not a deletion.
+- **`transcript: 'run'`** on an agent: before the session is disposed, a JSONL copy is written to
+  `runs/<runId>/agents/<agentId>.jsonl` (header line + every event) and listed in the run
+  result's `transcripts` map. Gives every run a durable, flow-scoped audit copy.
+- 15 test files / 131 tests (session-meta builder, transcript formatting/export, validation).
+
+### Notes
+
+- DSH has no "don't persist this session" switch and no public delete API for sessions or their
+  projection-cache rows, so `hidden` cannot remove the on-disk records — only the sidebar entry.
+  Existing "Ungrouped" rows from earlier runs stay until deleted manually.
+
 ## 0.0.21 — 2026-11-17 (unreleased)
 
 ### Added

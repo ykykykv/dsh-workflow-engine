@@ -63,6 +63,20 @@ run_workflow flow: './game' input: { subject: '@file:./docs/需求.md' }   # 导
 
 **bundle 与哈希**：加载时解析 `personaRef` 与所有 code 模块，按内容把每个文件记入 flow bundle，并计入 `specHash`——改 persona/code 会让旧 checkpoint 无法静默续跑（混跑新旧代码）。
 
+### 让成员会话不出现在侧边栏
+
+每个成员 agent 都跑在真实 DSH 会话上，因此对话会进会话存储（`~/.dsh/sessions/…`），默认还会出现在 Web 侧边栏的「未分组」里（成员跑在各自的隔离工作区）。两个 per-agent 开关控制这件事：
+
+- `visibility?: 'listed' | 'hidden'`（或 flow 级 `defaults.visibility`）——`hidden` 用 DSH 唯一的子会话标记 `origin: 'subagent'`（附带 `parentSession` 血统与 `delegationDepth: 1`）创建会话；Web 客户端会把 `origin === 'subagent'` 从所有工作区分组中过滤掉，成员就不再出现在侧边栏。注意这只是**可见性**：DSH 仍会持久化会话与投影缓存，没有“这个会话不要落盘”的开关。
+- `transcript?: 'none' | 'run'`——`run` 会在会话销毁前把对话以 JSONL（首行 header + 每个事件）写到 `runs/<runId>/agents/<agentId>.jsonl`，并把路径放进运行结果的 `transcripts` 映射。这是与 run 绑定的持久审计副本。
+
+```js
+// agents.js
+worker: { id: 'worker', persona: '…', visibility: 'hidden', transcript: 'run', … }
+```
+
+隐藏会话无法从 Web UI 打开（不在父会话的 subagent catalog 里）；续跑不受影响（`resumeRunId` 走 agent registry 恢复，不走 session API）。
+
 ### code 节点（确定性步骤）
 
 code 节点是与 agent 同级的一等节点：把“确定性计算”（解析/校验/变换 JSON、过滤排序去重、算术、哈希）从 LLM 手里拿回来。它不是“用代码写流程”——控制流、重试、checkpoint 仍归引擎。

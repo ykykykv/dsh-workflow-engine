@@ -109,6 +109,29 @@ Node kinds: `agent` / `decision` / `code` / `branch` / `sequence` / `parallel` /
 
 The loader resolves `personaRef` and every referenced code module, hashes each file's bytes into the run's **flow bundle**, and folds that into the resume gate: editing a persona or a code module changes `specHash`, so an old checkpoint cannot silently resume against new code.
 
+### Keeping member sessions out of the sidebar
+
+Every member agent runs on a real DSH session, so its transcript lands in the session store
+(`~/.dsh/sessions/…`) and, unless marked otherwise, shows up in the Web sidebar's "Ungrouped"
+bucket (members run in isolated run workspaces). Two per-agent knobs control this:
+
+- `visibility?: 'listed' | 'hidden'` (or flow-level `defaults.visibility`) — `hidden` creates the
+  session with DSH's only subagent marker, `origin: 'subagent'` (plus `parentSession` lineage and
+  `delegationDepth: 1`). The Web client filters `origin === 'subagent'` out of every workspace
+  bucket, so the member disappears from the sidebar. **Visibility only**: DSH keeps persisting
+  the session and its projection-cache row — there is no per-session "don't persist" switch.
+- `transcript?: 'none' | 'run'` — `run` writes a JSONL copy (header line + every event) to
+  `runs/<runId>/agents/<agentId>.jsonl` before the session is disposed, and lists the paths in
+  the run result's `transcripts` map. This is the durable, run-scoped audit copy.
+
+```js
+// agents.js
+worker: { id: 'worker', persona: '…', visibility: 'hidden', transcript: 'run', … }
+```
+
+Hidden sessions cannot be opened from the Web UI (they are not in the parent's subagent catalog);
+resume is unaffected (`resumeRunId` restores them through the agent registry, not the session API).
+
 ### Deterministic `code` nodes
 
 A `code` node is a first-class non-agent step: it does the computation the flow would otherwise have to ask an agent for (parse/validate/transform JSON, filter/sort/dedupe, arithmetic, hashing). It is **not** "the flow written in code" — control flow, retries, and checkpointing stay with the engine.

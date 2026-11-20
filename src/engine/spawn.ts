@@ -15,9 +15,10 @@ import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type Message } from '@deepseek-ai/dsh-llm'
-import { SessionId, type Session } from '@deepseek-ai/dsh-session'
+import type { SessionId, Session } from '@deepseek-ai/dsh-session'
 import type { AgentConfig, SandboxMode } from '../types.ts'
 import { importFresh } from './import-fresh.ts'
+import { buildSessionMeta } from './session-meta.ts'
 import { attachStructuredOutput, type StructuredAttachment } from './structured.ts'
 import { mountPreset, type AgentPresetsLike } from './preset-mount.ts'
 import { SessionRegistry } from './session-registry.ts'
@@ -56,9 +57,22 @@ export interface SpawnResult {
   error?: string
 }
 
+/** Brand a plain string as a SessionId (ids are minted as UUIDs by the registry
+ * or restored from an already-validated checkpoint header). */
+const toSessionId = (value: string): SessionId => value as SessionId
+
 interface LiveAgent {
   handle: { agent: Agent; dispose(): Promise<void> }
   structured?: StructuredAttachment
+  config: AgentConfig
+}
+
+/** Run-scoped knobs that are not part of any single agent's config. */
+export interface AgentRunnerOptions {
+  /** Flow-level `defaults.visibility`; an agent's own `visibility` wins. */
+  defaultVisibility?: 'listed' | 'hidden'
+  /** Called before a session is disposed when its agent asked for `transcript: 'run'`. */
+  onTranscript?: (agentId: string, config: AgentConfig, session: Session) => Promise<void>
 }
 
 export class AgentRunner {
@@ -72,13 +86,14 @@ export class AgentRunner {
     private readonly workspaceRoot: string,
     private readonly parent: ParentScope = {},
     seedSessions?: Record<string, string>,
+    private readonly options: AgentRunnerOptions = {},
   ) {
     this.sessions = new SessionRegistry(seedSessions)
   }
 
   /** Stable session id for a session-mode agent within this run. */
   sessionId(agentId: string): SessionId {
-    return SessionId(this.sessions.id(agentId))
+    return toSessionId(this.sessions.id(agentId))
   }
 
   /** agentId → sessionId mapping for checkpoint persistence. */
@@ -102,16 +117,28 @@ export class AgentRunner {
     return this.runOneShot(call)
   }
 
-  /** Dispose every live session-agent created by this runner. */
+  /** Dispose every live session-agent created by this runner (exporting transcripts first). */
   async disposeAll(): Promise<void> {
-    for (const live of this.live.values()) {
+    for (const [agentId, live] of this.live) {
+      await this.maybeExport(agentId, live.config, live.handle.agent.session)
       try { await live.handle.dispose() } catch { /* best-effort */ }
     }
     this.live.clear()
   }
 
+  /** Export a transcript copy when the agent opted into `transcript: 'run'`. */
+  private async maybeExport(agentId: string, config: AgentConfig, session: Session): Promise<void> {
+    if (config.transcript !== 'run' || this.options.onTranscript === undefined) return
+    try {
+      await this.options.onTranscript(agentId, config, session)
+    } catch (error) {
+      const logger = (this.ctx as unknown as { logger?: { warn?: (message: string) => void } }).logger
+      logger?.warn?.(`workflow ${this.flowId}: transcript export for agent "${agentId}" failed: ${messageOf(error)}`)
+    }
+  }
+
   private async runOneShot(call: SpawnCall): Promise<SpawnResult> {
-    const sid = call.structured ? SessionId(randomUUID()) : this.sessionId(call.agentId)
+    const sid = call.structured ? toSessionId(randomUUID()) : this.sessionId(call.agentId)
     let handle: LiveAgent
     try {
       handle = await this.materializeAgent(sid, call, false)
@@ -131,6 +158,7 @@ export class AgentRunner {
     } catch (error) {
       return { ok: false, error: messageOf(error) }
     } finally {
+      await this.maybeExport(call.agentId, call.config, handle.handle.agent.session)
       try { await handle.handle.dispose() } catch { /* best-effort */ }
     }
   }
@@ -143,7 +171,7 @@ export class AgentRunner {
       // paused run) before materializing fresh.
       const existing = this.ctx.agents.get(sid)
       if (existing) {
-        live = { handle: { agent: existing, dispose: async () => {} } }
+        live = { handle: { agent: existing, dispose: async () => {} }, config: call.config }
       } else {
         try {
           // Cross-process resume restores the persisted session (conversation
@@ -244,16 +272,20 @@ export class AgentRunner {
     }
     // Durable session metadata: preset identity and parent lineage (same fields
     // the platform's subagent delegation records), so a resumed or inspected
-    // session knows how it was composed.
-    const meta = {
+    // session knows how it was composed. `visibility: 'hidden'` adds DSH's only
+    // subagent marker, which keeps the session out of every sidebar bucket
+    // (the Web client hides `origin === 'subagent'`) without deleting it.
+    const hidden = (call.config.visibility ?? this.options.defaultVisibility ?? 'listed') === 'hidden'
+    const meta = buildSessionMeta({
       cwd: this.workspaceDir(call.agentId),
-      ...(presetId === undefined ? {} : { agentPreset: presetId }),
-      ...(this.parent.sessionId === undefined ? {} : { parentSession: this.parent.sessionId }),
-    }
+      presetId,
+      parentSessionId: this.parent.sessionId,
+      hidden,
+    })
     const handle = resume
       ? await this.ctx.agents.resume({ resumeSessionId: sid, agentOptions, setup, signal })
       : await this.ctx.agents.create({ sessionId: sid, meta, agentOptions, setup, signal })
-    return { handle, structured: attach }
+    return { handle, structured: attach, config: call.config }
   }
 
   private async drive(agent: Agent, taskText: string, signal?: AbortSignal, timeoutMs?: number): Promise<{ ok: boolean; error?: string }> {
